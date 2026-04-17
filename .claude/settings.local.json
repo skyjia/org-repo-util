@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(fish -n src/common.fish)",
+      "Bash(fish -n src/commands/clone.fish)",
+      "Bash(fish -n src/commands/sync.fish)",
+      "Bash(fish -n src/commands/export.fish)",
+      "Bash(fish -n src/main.fish)",
+      "Bash(fish *)",
+      "Bash(gh auth *)",
+      "Bash(grep -v '^/Users/skyjia/Codes/skyjia@GitHub/org-repo-util/$')",
+      "Bash(gh api *)",
+      "Bash(string replace *)",
+      "Bash(git -C repos/augmn/apisix-go-plugin-runner status)",
+      "Bash(git *)"
+    ]
+  }
+}
