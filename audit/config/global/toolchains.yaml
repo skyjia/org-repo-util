@@ -1,0 +1,56 @@
+# 全局工具链配置
+version: "1.0"
+
+# 工具定义
+tools:
+  eslint:
+    version: "8.56.0"
+    install_method: npm
+    install_command: "npm install -g eslint@{version}"
+    runtime: node
+    runtime_version: ">=18.0.0"
+
+    # 运行方式
+    execution:
+      mode: local  # local | docker | hybrid
+      command: "eslint --format json {files}"
+      working_dir: "{repo_root}"
+
+  golangci-lint:
+    version: "1.55.2"
+    install_method: binary
+    install_command: "curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v{version}"
+    runtime: go
+    runtime_version: ">=1.21.0"
+
+    execution:
+      mode: local
+      command: "golangci-lint run --out-format json"
+      working_dir: "{repo_root}"
+
+  dotnet-format:
+    version: "latest"
+    install_method: dotnet
+    install_command: "dotnet tool install -g dotnet-format"
+    runtime: dotnet
+    runtime_version: ">=7.0.0"
+
+    execution:
+      mode: local
+      command: "dotnet format --verify-no-changes"
+      working_dir: "{repo_root}"
+
+# 运行时环境
+runtimes:
+  node:
+    version: "20.10.0"
+    install_method: nvm
+  go:
+    version: "1.21.5"
+    install_method: binary
+  python:
+    version: "3.11.7"
+    install_method: pyenv
+  dotnet:
+    version: "7.0.0"
+    install_method: binary

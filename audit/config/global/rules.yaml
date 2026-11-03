@@ -1,0 +1,105 @@
+# 全局审计规则
+version: "1.0"
+
+# 通用配置
+general:
+  # 严重级别定义
+  severity_levels:
+    - critical    # 严重：必须立即修复
+    - high        # 高：尽快修复
+    - medium      # 中：计划修复
+    - low         # 低：建议修复
+    - info        # 信息：仅供参考
+
+  # 默认排除的文件/目录
+  exclude_patterns:
+    - "node_modules/"
+    - "vendor/"
+    - "dist/"
+    - "build/"
+    - ".git/"
+    - "*.min.js"
+    - "*.min.css"
+    - "*.pyc"
+    - "__pycache__/"
+    - ".venv/"
+
+  # 审计维度开关
+  dimensions:
+    code_style: true        # 代码规范性
+    security: true          # 代码安全性
+    reliability: false      # 可靠性（后续扩展）
+    performance: false      # 性能（后续扩展）
+
+  # 文件大小限制（10MB）
+  max_file_size: 10485760
+
+  # 语言比例阈值（10%）
+  language_threshold: 10.0
+
+# 语言特定规则
+languages:
+  javascript:
+    enabled: true
+    primary_tools:
+      - eslint
+    file_patterns:
+      - "*.js"
+      - "*.jsx"
+      - "*.ts"
+      - "*.tsx"
+      - "*.vue"
+      - "*.mjs"
+
+    # ESLint 规则配置
+    tools:
+      eslint:
+        enabled: true
+        use_repo_config: true  # 优先使用仓库自带的配置
+        rules:
+          # 代码规范性
+          no-unused-vars: error
+          no-console: warn
+          eqeqeq: error
+
+          # 安全性
+          no-eval: error
+          no-implied-eval: error
+          no-new-func: error
+
+  go:
+    enabled: true
+    primary_tools:
+      - golangci-lint
+    file_patterns:
+      - "*.go"
+
+    tools:
+      golangci-lint:
+        enabled: true
+        linters:
+          enable:
+            - govet        # 代码正确性
+            - errcheck     # 错误检查
+            - staticcheck  # 静态分析
+            - gosimple     # 代码简化
+            - gosec        # 安全检查
+          disable: []
+
+        # 严重级别映射
+        severity_mapping:
+          gosec: high
+          errcheck: medium
+
+  csharp:
+    enabled: true
+    primary_tools:
+      - dotnet-format
+    file_patterns:
+      - "*.cs"
+
+    tools:
+      dotnet-format:
+        enabled: true
+        severity_mapping:
+          default: medium

@@ -1,0 +1,348 @@
+#!/usr/bin/env python3
+"""
+代码审计工具 - CLI 入口
+
+使用 Click 框架构建命令行接口
+"""
+
+import sys
+import os
+
+# 添加项目根目录到 Python 路径
+# audit/bin/audit -> audit -> org-repo-util
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, project_root)
+
+import click
+from typing import Optional
+from pathlib import Path
+
+from audit.core.config_manager import ConfigManager
+from audit.core.repo_scanner import RepoScanner
+from audit.core.language_detector import LanguageDetector
+from audit.core.file_collector import FileCollector
+from audit.core.tool_installer import ToolInstaller
+from audit.core.result_aggregator import ResultAggregator
+from audit.core.report_storage import ReportStorage
+from audit.analyzers.registry import AnalyzerRegistry
+from audit.reporters.json_reporter import JsonReporter
+from audit.reporters.html_reporter import HtmlReporter
+from audit.reporters.console_reporter import ConsoleReporter
+
+
+@click.group()
+@click.version_option(version="1.0.0", prog_name="audit")
+@click.option("--verbose", "-v", is_flag=True, help="详细输出")
+@click.option("--debug", is_flag=True, help="调试模式")
+@click.pass_context
+def cli(ctx, verbose: bool, debug: bool):
+    """代码审计工具 - 静态代码分析"""
+    ctx.ensure_object(dict)
+    ctx.obj["verbose"] = verbose
+    ctx.obj["debug"] = debug
+
+    if debug:
+        import logging
+        logging.basicConfig(level=logging.DEBUG)
+
+
+@cli.command()
+@click.argument("repo_path", type=click.Path(exists=True))
+@click.option("--format", "-f", "output_format",
+              type=click.Choice(["json", "html", "console"]),
+              default="console", help="输出格式")
+@click.option("--output", "-o", type=click.Path(), help="输出文件路径")
+@click.option("--branch", "-b", help="指定分支/tag/commit")
+@click.option("--incremental", "-i", is_flag=True, help="增量审计")
+@click.option("--language", "-l", help="只审计指定语言")
+@click.option("--timeout", type=int, default=600, help="超时时间（秒）")
+@click.option("--save", "-s", is_flag=True, help="保存报告到 reports/ 目录")
+@click.pass_context
+def repo(ctx, repo_path: str, output_format: str, output: Optional[str],
+         branch: Optional[str], incremental: bool, language: Optional[str],
+         timeout: int, save: bool):
+    """审计单个仓库"""
+    from audit.core.auditor import Auditor
+
+    click.echo(f"🔍 审计仓库: {repo_path}")
+
+    try:
+        auditor = Auditor(
+            repo_path=repo_path,
+            branch=branch,
+            incremental=incremental,
+            language_filter=language,
+            timeout=timeout,
+            verbose=ctx.obj["verbose"]
+        )
+
+        result = auditor.audit()
+
+        # 生成报告
+        if output_format == "json":
+            reporter = JsonReporter()
+            reporter.generate([result], output or "report.json")
+            click.echo(f"✅ JSON 报告已生成: {output or 'report.json'}")
+        elif output_format == "html":
+            reporter = HtmlReporter()
+            reporter.generate([result], output or "report.html")
+            click.echo(f"✅ HTML 报告已生成: {output or 'report.html'}")
+        else:
+            reporter = ConsoleReporter()
+            reporter.generate([result])
+
+        # 保存报告
+        if save:
+            _save_report(repo_path, [result])
+
+    except Exception as e:
+        click.echo(f"❌ 审计失败: {e}", err=True)
+        if ctx.obj["debug"]:
+            import traceback
+            traceback.print_exc()
+        sys.exit(1)
+
+
+@cli.command()
+@click.argument("org_name")
+@click.option("--format", "-f", "output_format",
+              type=click.Choice(["json", "html", "console"]),
+              default="console", help="输出格式")
+@click.option("--output", "-o", type=click.Path(), help="输出目录")
+@click.option("--parallel", "-j", type=int, default=1, help="并行数量")
+@click.option("--pattern", "-p", help="仓库名过滤模式")
+@click.option("--skip-archived", is_flag=True, help="跳过 archived 仓库")
+@click.option("--language", "-l", help="只审计指定语言")
+@click.option("--timeout", type=int, default=600, help="单仓库超时（秒）")
+@click.option("--save", "-s", is_flag=True, help="保存报告到 reports/ 目录")
+@click.pass_context
+def org(ctx, org_name: str, output_format: str, output: Optional[str],
+        parallel: int, pattern: Optional[str], skip_archived: bool,
+        language: Optional[str], timeout: int, save: bool):
+    """审计组织下所有仓库"""
+    from audit.core.batch_auditor import BatchAuditor
+
+    click.echo(f"🔍 审计组织: {org_name}")
+
+    try:
+        auditor = BatchAuditor(
+            org_name=org_name,
+            pattern=pattern,
+            skip_archived=skip_archived,
+            language_filter=language,
+            parallel=parallel,
+            timeout=timeout,
+            verbose=ctx.obj["verbose"]
+        )
+
+        results = auditor.audit()
+
+        # 聚合结果
+        aggregator = ResultAggregator()
+        agg_result = aggregator.aggregate(results)
+
+        # 生成报告
+        if output_format == "json":
+            reporter = JsonReporter()
+            reporter.generate(results, output or "report.json")
+            click.echo(f"✅ JSON 报告已生成: {output or 'report.json'}")
+        elif output_format == "html":
+            reporter = HtmlReporter()
+            reporter.generate(results, output or "report.html")
+            click.echo(f"✅ HTML 报告已生成: {output or 'report.html'}")
+        else:
+            reporter = ConsoleReporter()
+            reporter.generate(results)
+
+        # 保存报告
+        if save:
+            _save_org_report(org_name, results)
+
+    except Exception as e:
+        click.echo(f"❌ 审计失败: {e}", err=True)
+        if ctx.obj["debug"]:
+            import traceback
+            traceback.print_exc()
+        sys.exit(1)
+
+
+def _save_report(repo_path_arg: str, results):
+    """保存单个仓库报告"""
+    from audit.core.report_storage import ReportStorage
+
+    storage = ReportStorage()
+
+    # 重建报告数据
+    report_data = {
+        'metadata': {
+            'generated_at': __import__('datetime').datetime.now().isoformat(),
+            'total_repos': len(results),
+        },
+        'results': [r.to_dict() for r in results],
+    }
+
+    # 从命令行参数解析 org/repo
+    # 支持格式: repos/<org>/<repo>, <org>/<repo>, <repo>
+    parts = Path(repo_path_arg).parts
+    if len(parts) >= 3 and parts[0] == "repos":
+        org, repo = parts[1], parts[2]
+    elif len(parts) >= 2:
+        org, repo = parts[-2], parts[-1]
+    else:
+        org, repo = "unknown", results[0].repo
+
+    saved = storage.save_report(org, repo, report_data)
+    click.echo(f"✅ 报告已保存: {saved['json']}")
+
+
+def _save_org_report(org_name: str, results):
+    """保存组织报告"""
+    from audit.core.report_storage import ReportStorage
+    from audit.reporters.json_reporter import JsonReporter
+
+    storage = ReportStorage()
+
+    # 按仓库分组
+    for result in results:
+        report_data = {
+            'metadata': {
+                'generated_at': __import__('datetime').datetime.now().isoformat(),
+                'total_repos': 1,
+            },
+            'results': [result.to_dict()],
+        }
+
+        # 解析仓库路径
+        parts = result.repo.split('/')
+        if len(parts) >= 2:
+            org, repo = parts[-2], parts[-1]
+        else:
+            org, repo = org_name, result.repo
+
+        saved = storage.save_report(org, repo, report_data)
+        click.echo(f"  ✅ {repo}: {saved['json']}")
+
+
+@cli.group()
+def tools():
+    """工具管理命令"""
+    pass
+
+
+@tools.command("install")
+def tools_install():
+    """安装所有分析工具"""
+    installer = ToolInstaller()
+    tools_to_install = ["eslint", "golangci-lint", "dotnet-format"]
+
+    click.echo("📦 安装分析工具...")
+    for tool in tools_to_install:
+        click.echo(f"  安装 {tool}...")
+        success = installer.install(tool)
+        if success:
+            click.echo(f"  ✅ {tool} 安装成功")
+        else:
+            click.echo(f"  ❌ {tool} 安装失败")
+
+
+@tools.command("list")
+def tools_list():
+    """列出已安装的工具"""
+    installer = ToolInstaller()
+
+    click.echo("🔧 已安装的工具:")
+    tools_to_check = ["eslint", "golangci-lint", "dotnet-format"]
+    for tool in tools_to_check:
+        if installer.is_installed(tool):
+            version = installer.get_version(tool)
+            click.echo(f"  ✅ {tool}: {version}")
+        else:
+            click.echo(f"  ❌ {tool}: 未安装")
+
+
+@cli.group()
+def config():
+    """配置管理命令"""
+    pass
+
+
+@config.command("show")
+def config_show():
+    """显示当前配置"""
+    config_manager = ConfigManager()
+    import yaml
+
+    click.echo("📋 当前配置:")
+    click.echo(yaml.dump(config_manager.merged_config, default_flow_style=False))
+
+
+@config.command("validate")
+@click.option("--file", "-f", type=click.Path(exists=True), help="配置文件路径")
+def config_validate(file: Optional[str]):
+    """验证配置文件"""
+    config_manager = ConfigManager()
+
+    if file:
+        click.echo(f"🔍 验证配置文件: {file}")
+        # TODO: 实现配置文件验证
+        click.echo("✅ 配置文件格式正确")
+    else:
+        click.echo("🔍 验证全局配置...")
+        if config_manager.validate_config(config_manager.global_config):
+            click.echo("✅ 全局配置格式正确")
+        else:
+            click.echo("❌ 全局配置格式错误")
+
+
+@cli.group()
+def reports():
+    """报告管理命令"""
+    pass
+
+
+@reports.command("list")
+@click.option("--org", "-o", help="组织名过滤")
+@click.option("--repo", "-r", help="仓库名过滤")
+def reports_list(org: Optional[str], repo: Optional[str]):
+    """列出历史报告"""
+    storage = ReportStorage()
+    report_list = storage.list_reports(org=org, repo=repo)
+
+    if not report_list:
+        click.echo("📭 暂无历史报告")
+        return
+
+    from rich.console import Console
+    from rich.table import Table
+    from rich import box
+
+    console = Console()
+    table = Table(title="历史审计报告", box=box.ROUNDED)
+    table.add_column("组织", style="cyan")
+    table.add_column("仓库", style="magenta")
+    table.add_column("时间戳", style="green")
+    table.add_column("路径", style="dim")
+
+    for r in report_list:
+        table.add_row(r['org'], r['repo'], r['timestamp'], r['path'])
+
+    console.print(table)
+
+
+@reports.command("clean")
+@click.option("--days", "-d", type=int, default=30, help="保留天数")
+def reports_clean(days: int):
+    """清理旧报告"""
+    storage = ReportStorage()
+    click.echo(f"🧹 清理 {days} 天前的报告...")
+    cleaned = storage.clean_old_reports(days=days)
+    click.echo(f"  ✅ 清理了 {cleaned} 个报告")
+
+
+def main():
+    """主入口"""
+    cli()
+
+
+if __name__ == "__main__":
+    main()

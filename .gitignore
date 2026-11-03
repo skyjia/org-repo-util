@@ -20,3 +20,29 @@ CLAUDE.local.MD
 # Verification Artifacts (e.g., Playwright screenshots)
 .playwright-mcp/
 *-check.png
+
+# Audit tool - Python
+audit/.venv/
+audit/__pycache__/
+audit/**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Audit tool - Cache
+audit/cache/
+
+# Audit tool - Reports (already excluded above)
+# reports/
+
+# Audit tool - IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Audit tool - OS
+.DS_Store
+Thumbs.db
