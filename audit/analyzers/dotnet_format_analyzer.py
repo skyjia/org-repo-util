@@ -84,6 +84,9 @@ class DotnetFormatAnalyzer(BaseAnalyzer):
             # 解析输出
             issues = self._parse_output(result.stdout, result.stderr)
 
+            # 过滤被忽略的问题
+            issues = self.filter_ignored_issues(issues)
+
             duration = time.time() - start_time
 
             return AnalysisResult(
@@ -226,6 +229,11 @@ class DotnetFormatAnalyzer(BaseAnalyzer):
 
     def _map_severity(self, rule_id: str) -> Severity:
         """根据规则映射严重级别"""
+        # 格式问题 → INFO（不影响代码质量）
+        format_rules = ["WHITESPACE", "NEWLINE", "FORMATTING", "INDENTATION"]
+        if rule_id in format_rules or rule_id.upper() in format_rules:
+            return Severity.INFO
+
         # 高严重级别（错误）
         if rule_id.startswith("CS") and rule_id[2:].isdigit():
             # C# 编译器错误

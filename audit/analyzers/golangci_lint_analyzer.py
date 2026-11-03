@@ -72,6 +72,9 @@ class GolangciLintAnalyzer(BaseAnalyzer):
             # 解析 JSON 输出
             issues = self._parse_output(result.stdout)
 
+            # 过滤被忽略的问题
+            issues = self.filter_ignored_issues(issues)
+
             duration = time.time() - start_time
 
             return AnalysisResult(
@@ -230,6 +233,11 @@ class GolangciLintAnalyzer(BaseAnalyzer):
 
     def _map_severity(self, rule_id: str) -> Severity:
         """根据 linter 映射严重级别"""
+        # 格式问题 → INFO（不影响代码质量）
+        format_linters = ["gofmt", "gofumpt", "goimports"]
+        if rule_id in format_linters:
+            return Severity.INFO
+
         # 高严重级别
         high_linters = ["govet", "staticcheck", "errcheck"]
         if rule_id in high_linters:

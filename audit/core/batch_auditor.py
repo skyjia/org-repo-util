@@ -24,7 +24,7 @@ class BatchAuditor:
     def __init__(self, org_name: str, pattern: Optional[str] = None,
                  skip_archived: bool = True, language_filter: Optional[str] = None,
                  parallel: int = 1, timeout: int = 600, verbose: bool = False,
-                 incremental: bool = False):
+                 incremental: bool = False, skip_dependency_scan: bool = False):
         """
         初始化批量审计器
 
@@ -37,6 +37,7 @@ class BatchAuditor:
             timeout: 单仓库超时
             verbose: 详细输出
             incremental: 是否增量审计
+            skip_dependency_scan: 是否跳过依赖漏洞扫描
         """
         self.org_name = org_name
         self.pattern = pattern
@@ -46,6 +47,7 @@ class BatchAuditor:
         self.timeout = timeout
         self.verbose = verbose
         self.incremental = incremental
+        self.skip_dependency_scan = skip_dependency_scan
 
         self.repo_scanner = RepoScanner()
         self.aggregator = ResultAggregator()
@@ -163,7 +165,8 @@ class BatchAuditor:
                 language_filter=self.language_filter,
                 timeout=self.timeout,
                 verbose=self.verbose,
-                incremental=self.incremental
+                incremental=self.incremental,
+                skip_dependency_scan=self.skip_dependency_scan
             )
             return auditor.audit()
         except Exception as e:

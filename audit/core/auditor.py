@@ -12,6 +12,7 @@ from audit.core.language_detector import LanguageDetector
 from audit.core.file_collector import FileCollector
 from audit.core.models import AnalysisResult
 from audit.core.change_detector import ChangeDetector
+from audit.core.dependency_scanner import DependencyScanner
 from audit.analyzers.registry import AnalyzerRegistry
 
 
@@ -23,7 +24,7 @@ class Auditor:
 
     def __init__(self, repo_path: str, branch: Optional[str] = None,
                  incremental: bool = False, language_filter: Optional[str] = None,
-                 timeout: int = 600, verbose: bool = False):
+                 timeout: int = 600, verbose: bool = False, skip_dependency_scan: bool = False):
         """
         初始化审计器
 
@@ -34,6 +35,7 @@ class Auditor:
             language_filter: 语言过滤
             timeout: 超时时间
             verbose: 详细输出
+            skip_dependency_scan: 是否跳过依赖扫描
         """
         self.repo_path = Path(repo_path)
         self.branch = branch
@@ -41,6 +43,7 @@ class Auditor:
         self.language_filter = language_filter
         self.timeout = timeout
         self.verbose = verbose
+        self.skip_dependency_scan = skip_dependency_scan
 
         self.config_manager = ConfigManager()
         self.config_manager.load_repo_config(repo_path)
@@ -48,6 +51,7 @@ class Auditor:
         self.file_collector = FileCollector(self.config_manager.merged_config)
         self.analyzer_registry = AnalyzerRegistry()
         self.change_detector = ChangeDetector(repo_path)
+        self.dependency_scanner = DependencyScanner()
 
         if verbose:
             logging.basicConfig(level=logging.INFO)
@@ -159,7 +163,21 @@ class Auditor:
         # 6. 执行分析
         try:
             result = analyzer.analyze()
-            logger.info(f"审计完成: {len(result.issues)} 个问题")
+            logger.info(f"代码分析完成: {len(result.issues)} 个问题")
+
+            # 7. 执行依赖扫描（如果未跳过）
+            if not self.skip_dependency_scan:
+                logger.info("开始依赖漏洞扫描...")
+                dep_issues = self.dependency_scanner.scan(str(self.repo_path))
+                if dep_issues:
+                    logger.info(f"依赖扫描完成: {len(dep_issues)} 个漏洞")
+                    result.issues.extend(dep_issues)
+                else:
+                    logger.info("依赖扫描完成: 未发现漏洞")
+            else:
+                logger.info("跳过依赖漏洞扫描")
+
+            logger.info(f"审计完成: 共 {len(result.issues)} 个问题")
             return result
         except Exception as e:
             logger.error(f"分析器执行失败: {e}")

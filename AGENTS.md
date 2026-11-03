@@ -45,6 +45,19 @@ fish src/main.fish --help
 - GitHub CLI (`gh`), authenticated via `gh auth login`
 - `jq` for JSON processing (`brew install jq`)
 
+## 多版本工具管理
+
+本机使用 [asdf](https://asdf-vm.com/) 管理多版本工具环境，已安装的工具包括：
+- **Java** (多个 JDK 版本)
+- **Ruby** (多个 Ruby 版本)
+- **Node.js** (多个 Node.js 版本)
+
+遇到版本相关问题时（如工具版本不兼容、需要切换版本等），可以利用 asdf 辅助解决：
+- `asdf list` — 查看已安装的工具和版本
+- `asdf global <tool> <version>` — 设置全局默认版本
+- `asdf local <tool> <version>` — 设置当前目录版本
+- `asdf install <tool> <version>` — 安装指定版本
+
 ## Architecture Notes
 
 - Pure Fish shell — no Python dependencies

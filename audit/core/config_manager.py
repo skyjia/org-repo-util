@@ -158,6 +158,60 @@ class ConfigManager:
 
         return value
 
+    def get_file_rules(self, file_path: str, language: str) -> Dict[str, str]:
+        """
+        获取文件级别的规则覆盖
+
+        支持在配置中定义基于 glob 模式的文件级规则覆盖：
+        ```yaml
+        overrides:
+          files:
+            "src/legacy/**":
+              rules:
+                no-console: ignore
+                no-unused-vars: warn
+            "*.test.js":
+              rules:
+                no-console: ignore
+        ```
+
+        Args:
+            file_path: 文件路径（相对于仓库根目录）
+            language: 语言标识（如 "javascript"）
+
+        Returns:
+            规则覆盖字典，如 {"no-console": "ignore"}
+        """
+        import fnmatch
+
+        overrides = self.get("overrides.files", {})
+        if not overrides:
+            return {}
+
+        rules = {}
+        for pattern, config in overrides.items():
+            if fnmatch.fnmatch(file_path, pattern):
+                file_rules = config.get("rules", {})
+                rules.update(file_rules)
+
+        return rules
+
+    def is_rule_ignored(self, file_path: str, rule_id: str, language: str) -> bool:
+        """
+        检查特定文件的特定规则是否被忽略
+
+        Args:
+            file_path: 文件路径
+            rule_id: 规则 ID
+            language: 语言标识
+
+        Returns:
+            是否被忽略
+        """
+        file_rules = self.get_file_rules(file_path, language)
+        severity = file_rules.get(rule_id, "")
+        return severity.lower() == "ignore"
+
     def _get_default_config(self) -> Dict[str, Any]:
         """
         获取默认配置

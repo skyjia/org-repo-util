@@ -58,14 +58,31 @@ def cli(ctx, verbose: bool, debug: bool):
 @click.option("--language", "-l", help="只审计指定语言")
 @click.option("--timeout", type=int, default=600, help="超时时间（秒）")
 @click.option("--save", "-s", is_flag=True, help="保存报告到 reports/ 目录")
+@click.option("--skip-dependency-scan", is_flag=True, help="跳过依赖漏洞扫描")
 @click.pass_context
 def repo(ctx, repo_path: str, output_format: str, output: Optional[str],
          branch: Optional[str], incremental: bool, language: Optional[str],
-         timeout: int, save: bool):
+         timeout: int, save: bool, skip_dependency_scan: bool):
     """审计单个仓库"""
     from audit.core.auditor import Auditor
+    from audit.core.audit_logger import init_audit_logger, close_audit_logger
+    from datetime import datetime
 
     click.echo(f"🔍 审计仓库: {repo_path}")
+
+    # 确定日志文件路径
+    log_file = None
+    if save:
+        # 如果保存报告，日志文件保存在报告目录
+        from pathlib import Path
+        repo_name = Path(repo_path).name
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        report_dir = Path("reports") / "augmn" / repo_name / timestamp
+        report_dir.mkdir(parents=True, exist_ok=True)
+        log_file = str(report_dir / "report.log")
+
+    # 初始化审计日志记录器
+    audit_logger = init_audit_logger(log_file=log_file, verbose=ctx.obj["verbose"])
 
     try:
         auditor = Auditor(
@@ -74,7 +91,8 @@ def repo(ctx, repo_path: str, output_format: str, output: Optional[str],
             incremental=incremental,
             language_filter=language,
             timeout=timeout,
-            verbose=ctx.obj["verbose"]
+            verbose=ctx.obj["verbose"],
+            skip_dependency_scan=skip_dependency_scan
         )
 
         result = auditor.audit()
@@ -95,6 +113,8 @@ def repo(ctx, repo_path: str, output_format: str, output: Optional[str],
         # 保存报告
         if save:
             _save_report(repo_path, [result])
+            if log_file:
+                click.echo(f"📋 审计日志已保存: {log_file}")
 
     except Exception as e:
         click.echo(f"❌ 审计失败: {e}", err=True)
@@ -102,6 +122,9 @@ def repo(ctx, repo_path: str, output_format: str, output: Optional[str],
             import traceback
             traceback.print_exc()
         sys.exit(1)
+    finally:
+        # 关闭审计日志记录器
+        close_audit_logger()
 
 
 @cli.command()
@@ -117,10 +140,12 @@ def repo(ctx, repo_path: str, output_format: str, output: Optional[str],
 @click.option("--timeout", type=int, default=600, help="单仓库超时（秒）")
 @click.option("--incremental", "-i", is_flag=True, help="增量审计")
 @click.option("--save", "-s", is_flag=True, help="保存报告到 reports/ 目录")
+@click.option("--skip-dependency-scan", is_flag=True, help="跳过依赖漏洞扫描")
 @click.pass_context
 def org(ctx, org_name: str, output_format: str, output: Optional[str],
         parallel: int, pattern: Optional[str], skip_archived: bool,
-        language: Optional[str], timeout: int, incremental: bool, save: bool):
+        language: Optional[str], timeout: int, incremental: bool, save: bool,
+        skip_dependency_scan: bool):
     """审计组织下所有仓库"""
     from audit.core.batch_auditor import BatchAuditor
 
@@ -135,7 +160,8 @@ def org(ctx, org_name: str, output_format: str, output: Optional[str],
             parallel=parallel,
             timeout=timeout,
             verbose=ctx.obj["verbose"],
-            incremental=incremental
+            incremental=incremental,
+            skip_dependency_scan=skip_dependency_scan
         )
 
         results = auditor.audit()
@@ -426,6 +452,26 @@ def reports_index():
         click.echo(f"  ✅ 索引页已生成: {output_path}")
     else:
         click.echo("  ⚠️  未生成索引页（没有找到报告）")
+
+
+@cli.group()
+def docs():
+    """文档生成命令"""
+    pass
+
+
+@docs.command("rules")
+def docs_rules():
+    """生成规则文档"""
+    from audit.core.rule_doc_generator import RuleDocGenerator
+
+    click.echo("📝 生成规则文档...")
+    generator = RuleDocGenerator()
+    output_path = generator.generate()
+    if output_path:
+        click.echo(f"  ✅ 规则文档已生成: {output_path}")
+    else:
+        click.echo("  ⚠️  生成失败")
 
 
 def main():
