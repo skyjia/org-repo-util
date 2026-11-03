@@ -78,12 +78,26 @@ function cmd_scan
         # Check 3: Query GitHub API to see if repo still exists
         set -l api_output (gh api "repos/$remote_org/$remote_repo" --jq '{name: .name, full_name: .full_name}' 2>&1)
         if test $status -ne 0
-            set -a deleted_repos "$full_name"
-            set_color red
-            echo "deleted or inaccessible on GitHub"
-            set_color normal
-            log_error_raw "scan '$full_name'" "deleted or inaccessible on GitHub (remote: $remote_url, api: $api_output)"
-            continue
+            # gh api failed - verify with git ls-remote to avoid false positives
+            # (e.g., API rate limiting, temporary auth issues)
+            git ls-remote "$remote_url" HEAD >/dev/null 2>&1
+            if test $status -ne 0
+                set -a deleted_repos "$full_name"
+                set_color red
+                echo "deleted or inaccessible on GitHub"
+                set_color normal
+                log_error_raw "scan '$full_name'" "deleted or inaccessible on GitHub (remote: $remote_url, api: $api_output)"
+                continue
+            else
+                # git ls-remote succeeded but gh api failed - likely API issue, not deleted
+                # Skip rename check since we don't have valid API data
+                log_error_raw "scan '$full_name'" "gh api failed but git ls-remote succeeded (api: $api_output)"
+                set_color green
+                echo "ok (api unavailable, remote accessible)"
+                set_color normal
+                set healthy_count (math $healthy_count + 1)
+                continue
+            end
         end
 
         # Check 4: Has the repo been renamed?

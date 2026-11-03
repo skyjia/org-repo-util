@@ -5,7 +5,7 @@ source (dirname (status -f))/common.fish
 function print_usage
     echo "Usage:"
     echo "  fish main.fish clone <org> [--pattern <glob>] [--list <repo1,repo2>]"
-    echo "  fish main.fish sync [--dry-run]"
+    echo "  fish main.fish sync [--dry-run] [-j N|--jobs N]"
     echo "  fish main.fish export [--org <org>] [--output <file>] [--local]"
     echo "  fish main.fish scan"
     echo "  fish main.fish                   # interactive menu"
@@ -20,6 +20,7 @@ function print_usage
     echo "  --pattern   Glob pattern to filter repo names during clone"
     echo "  --list      Comma-separated list of specific repos to clone"
     echo "  --dry-run   Preview sync without pulling"
+    echo "  -j, --jobs  Number of concurrent jobs for sync (default: 1)"
     echo "  --org       Organization name for export"
     echo "  --output    Write export to file instead of stdout"
     echo "  --local     Export only locally cloned repos"
@@ -97,10 +98,18 @@ function handle_sync_menu
     set -l dry
     read dry
 
+    printf "  Concurrent jobs [1]: "
+    set -l jobs
+    read jobs
+    if test -z "$jobs"
+        set jobs 1
+    end
+
     set -l cmd "fish (dirname (status -f))/commands/sync.fish"
     if string match -qi 'y*' "$dry"
         set cmd "$cmd --dry-run"
     end
+    set cmd "$cmd --jobs $jobs"
 
     eval $cmd
 end

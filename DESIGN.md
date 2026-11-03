@@ -59,7 +59,11 @@ org-repo-util/
 
 - Scans `repos/` for all cloned repositories
 - `--dry-run` mode: shows what would be pulled for each repo without executing
-- Default mode: runs `git pull --rebase` on each repo
+- `-j N` or `--jobs N`: number of concurrent sync jobs (default: 1)
+- Uses Fish job control with background processes for parallel execution
+- Real-time output: each job prints its result immediately using a file-based lock for atomic output
+- Uses `set_color` for colored status output (yellow=up to date, green=updated, red=failed)
+- Counters tracked via temp files for final summary
 - Reports per-repo status: up-to-date, updated, or failed
 
 #### `commands/export.fish` — Export Repo Info
@@ -110,4 +114,8 @@ User → main.fish (parse args / menu)
 ## Parallel Execution
 
 - Clone uses Fish's built-in job control: `git clone ... &` followed by `wait`
-- Sync and export run sequentially (safety: avoid concurrent git operations)
+- Sync uses configurable parallel execution via `-j/--jobs` flag (default: 1 job)
+- Sync spawns background Fish processes that print results in real-time
+- File-based lock ensures atomic output lines (no interleaved repo names/statuses)
+- Counter files track success/fail/uptodate counts for final summary
+- Export runs sequentially (single API call with pagination)

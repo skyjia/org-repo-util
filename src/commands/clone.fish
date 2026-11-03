@@ -18,8 +18,8 @@ function cmd_clone --argument-names org pattern repo_list
 
     mkdir -p "$repos_dir"
 
-    # Fetch repo names from GitHub API
-    set -l api_output (gh api "orgs/$org/repos" --paginate --jq '.[].name' 2>&1)
+    # Fetch repo names from GitHub API (including private repos)
+    set -l api_output (gh api "orgs/$org/repos" --paginate -q type=all --jq '.[].name' 2>&1)
     if test $status -ne 0
         log_error "Failed to fetch repos for org '$org'" $api_output
         return 1

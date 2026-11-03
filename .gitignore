@@ -1,1 +1,19 @@
+# Logs
 logs/**
+
+# Claude Code
+.claude/settings.local.json
+
+# AI-Specific Logs & Hooks
+.claude/hooks/logs/
+*.log
+plan/
+
+# Local AI Configurations
+CLAUDE.local.MD
+.claude/worktrees/
+.claude/scheduled_tasks.lock
+
+# Verification Artifacts (e.g., Playwright screenshots)
+.playwright-mcp/
+*-check.png

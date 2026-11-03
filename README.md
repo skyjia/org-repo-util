@@ -23,10 +23,20 @@ fish src/main.fish
 
 # CLI commands
 fish src/main.fish clone <org> [--pattern <glob>] [--list <repo1,repo2>]
-fish src/main.fish sync [--dry-run]
+fish src/main.fish sync [--dry-run] [-j N|--jobs N]
 fish src/main.fish export [--org <org>] [--output <file>] [--local]
 fish src/main.fish scan                    # check for deleted, renamed, corrupted repos
 ```
+
+### Sync Options
+
+- `--dry-run` — Preview what would be updated without pulling
+- `-j N` or `--jobs N` — Number of concurrent sync jobs (default: 1)
+
+When using parallel sync (`-j N > 1`), each repository's sync result is displayed in real-time as it completes, with color-coded status:
+- **Yellow** — up to date
+- **Green** — updated
+- **Red** — failed
 
 ## Directory Structure
 
