@@ -97,7 +97,9 @@ org-repo-util/
 │   │   ├── change_detector.py          # M06: 变更检测
 │   │   ├── tool_installer.py           # M07: 工具安装
 │   │   ├── job_scheduler.py            # M16: 任务调度
-│   │   └── result_aggregator.py        # M17: 结果聚合
+│   │   ├── result_aggregator.py        # M17: 结果聚合
+│   │   ├── report_storage.py           # 报告存储
+│   │   └── index_generator.py          # 报告索引生成
 │   │
 │   ├── analyzers/                      # 分析器插件
 │   │   ├── __init__.py
@@ -151,6 +153,7 @@ org-repo-util/
 │           └── sample_repos/
 │
 ├── reports/                            # 审计报告存储
+│   ├── index.html                      # 报告索引页
 │   ├── .gitkeep
 │   └── <org>/<repo>/<timestamp>/
 │
@@ -186,6 +189,7 @@ audit tools install                   # 安装所有工具
 audit tools list                      # 列出已安装工具
 audit reports list                    # 列出历史报告
 audit reports clean [--days N]        # 清理旧报告
+audit reports index                   # 生成/更新报告索引页
 ```
 
 **选项定义：**
@@ -721,6 +725,16 @@ class ESLintAnalyzer(BaseAnalyzer):
 - M14.1 生成 HTML 报告
 - M15.1 生成终端摘要
 
+**HTML 报告增强功能（MVP 已完成）：**
+- ✅ 按严重级别筛选问题（Critical/High/Medium/Low/Info/All）
+- ✅ 按规则名称筛选问题（下拉选择框）
+- ✅ 分页显示大量问题（每页 50/100/200 条可选）
+- ✅ 多条件组合筛选（严重级别 + 规则，AND 逻辑）
+- ✅ 清除筛选功能（一键重置所有条件）
+- ✅ 单仓库报告移除「审计仓库」统计项，组织报告保留
+- ✅ JavaScript 实时 filtering，无页面刷新
+- ✅ 响应式设计，适配桌面和移动端
+
 **类设计：**
 ```python
 class BaseReporter(ABC):
@@ -823,6 +837,66 @@ class ResultAggregator:
             failed_repo_list=self._get_failed_repos(results),
         )
 ```
+
+---
+
+### 3.15 报告索引生成器
+
+**文件：** `audit/core/index_generator.py`
+
+**功能点：**
+- 生成 `reports/index.html` 索引页
+- 按组织 > 仓库 > 最新报告组织内容
+- 显示仓库统计信息（语言、问题数、最后审计时间）
+- 提供搜索、排序功能
+- 审计后自动更新索引
+
+**类设计：**
+```python
+class IndexGenerator:
+    def __init__(self, reports_dir: str = "reports"):
+        self.reports_dir = Path(reports_dir)
+    
+    def generate_index(self) -> str:
+        """生成索引页 HTML"""
+        # 1. 扫描所有报告
+        reports = self._scan_all_reports()
+        
+        # 2. 按组织分组
+        orgs = self._group_by_org(reports)
+        
+        # 3. 渲染 HTML
+        html = self._render_index(orgs)
+        
+        # 4. 写入文件
+        output_path = self.reports_dir / "index.html"
+        with open(output_path, 'w', encoding='utf-8') as f:
+            f.write(html)
+        
+        return str(output_path)
+    
+    def _scan_all_reports(self) -> List[Dict]:
+        """扫描所有报告并提取元数据"""
+        pass
+    
+    def _group_by_org(self, reports: List[Dict]) -> Dict[str, List[Dict]]:
+        """按组织分组报告"""
+        pass
+    
+    def _render_index(self, orgs: Dict[str, List[Dict]]) -> str:
+        """渲染索引页 HTML（使用 Jinja2）"""
+        pass
+```
+
+**索引页功能：**
+- **统计概览**：总仓库数、总问题数、语言分布
+- **搜索框**：JavaScript 实时过滤仓库名/语言
+- **排序功能**：按问题数/语言/最后审计时间排序
+- **响应式设计**：适配桌面和移动端
+
+**触发时机：**
+- 执行 `audit repo --save` 或 `audit org --save` 后自动更新
+- 手动执行 `audit reports index` 命令
 
 ---
 
@@ -972,6 +1046,40 @@ class ResultAggregator:
 | D17 | 报告保留天数默认多少？ | - | **30 天** | ✅ 已确认 |
 | D18 | 是否需要支持报告导出（如 PDF）？ | - | **第一期不需要** | ✅ 已确认 |
 
+### 5.3 MVP 实施总结（2026-11-03 完成）
+
+**已完成功能：**
+- ✅ CLI 完整功能（repo/org/config/tools/reports 命令）
+- ✅ 三种分析器（ESLint、golangci-lint、dotnet-format）
+- ✅ 三种报告格式（JSON、HTML、Console）
+- ✅ 报告存储与索引（reports/<org>/<repo>/<timestamp>/ + index.html）
+- ✅ 增量审计（--incremental）
+- ✅ 并行审计（--parallel N）
+- ✅ HTML 报告交互优化（筛选、分页、多条件组合）
+- ✅ 报告索引页（搜索、排序、自动更新）
+
+**关键实现决策：**
+| 编号 | 问题 | 决策方案 | 备注 |
+|------|------|----------|------|
+| M01 | ESLint 配置策略 | 优先使用仓库配置，回退到最小化配置 | 避免 plugin missing 错误 |
+| M02 | golangci-lint 版本兼容 | 自动检测版本并使用对应参数 | 支持 v1 和 v2 格式 |
+| M03 | HTML 报告结构 | 统计卡片使用 .stats-card，仓库详情使用 .repo-card | 避免 CSS 类冲突导致 JS 崩溃 |
+| M04 | 大量问题处理 | 前端分页 + 实时 filtering | 支持 10000+ 问题流畅展示 |
+| M05 | 报告索引更新 | 审计后自动更新 + 手动命令 | 兼顾便利性和灵活性 |
+
+**基准测试结果：**
+| 仓库 | 语言 | 耗时 | 问题数 | 状态 |
+|------|------|------|--------|------|
+| fe-casamiel-admin | JavaScript | 0.69s | 207 | ✅ |
+| be-casamiel-applet-mall | C# | 24.64s | 13,484 | ✅ |
+| be-promotion-center | Go | 1.74s | 738 | ✅ |
+
+**E2E 验证：**
+- ✅ Playwright + Chromium 浏览器测试
+- ✅ HTML 报告分页、筛选功能正常
+- ✅ 报告索引页搜索、排序功能正常
+- ✅ 无 JavaScript 错误
+
 ---
 
 ## 6. 技术依赖
@@ -1003,7 +1111,34 @@ jsonschema>=4.0.0     # 配置验证
 
 ## 7. 实施计划
 
-### 7.1 模块实现顺序
+### 7.1 第一期 MVP（已完成 ✅）
+
+**完成时间：** 2026-11-03  
+**任务总数：** 123 个  
+**完成率：** 100%
+
+**实现内容：**
+- 基础框架搭建（CLI、配置管理、语言检测、文件收集）
+- 三种分析器（ESLint、golangci-lint、dotnet-format）
+- 报告系统（JSON、HTML、Console、存储、索引）
+- 增强功能（增量审计、并行审计、HTML 交互优化）
+
+**详细记录：** 见 `AUDIT-DEV-PLAN-0_mvp_completed.md`
+
+### 7.2 第二期规划（进行中）
+
+**目标：** 质量提升与功能扩展
+
+**规划方向：**
+- 误报率优化（规则调优、AI 辅助筛选）
+- 依赖安全扫描（npm audit、dependabot 集成）
+- AI 辅助功能（配置生成、结果解读）
+- CI/CD 集成（GitHub Actions、GitLab CI）
+- 更多语言支持（Dart、Python、Shell）
+
+**详细计划：** 见 `AUDIT-DEV-PLAN-1.md`
+
+### 7.3 模块实现顺序（原始规划，供参考）
 
 | 阶段 | 模块 | 编号 | 依赖 | 说明 |
 |------|------|------|------|------|
@@ -1056,5 +1191,5 @@ jsonschema>=4.0.0     # 配置验证
 ---
 
 **最后更新：** 2026-11-03  
-**版本：** 1.1  
-**状态：** 设计已确认，可开始实施
+**版本：** 1.2  
+**状态：** MVP 已完成 ✅ (123/123 任务)，第二期规划中

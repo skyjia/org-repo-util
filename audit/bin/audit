@@ -24,6 +24,7 @@ from audit.core.file_collector import FileCollector
 from audit.core.tool_installer import ToolInstaller
 from audit.core.result_aggregator import ResultAggregator
 from audit.core.report_storage import ReportStorage
+from audit.core.index_generator import IndexGenerator
 from audit.analyzers.registry import AnalyzerRegistry
 from audit.reporters.json_reporter import JsonReporter
 from audit.reporters.html_reporter import HtmlReporter
@@ -114,11 +115,12 @@ def repo(ctx, repo_path: str, output_format: str, output: Optional[str],
 @click.option("--skip-archived", is_flag=True, help="跳过 archived 仓库")
 @click.option("--language", "-l", help="只审计指定语言")
 @click.option("--timeout", type=int, default=600, help="单仓库超时（秒）")
+@click.option("--incremental", "-i", is_flag=True, help="增量审计")
 @click.option("--save", "-s", is_flag=True, help="保存报告到 reports/ 目录")
 @click.pass_context
 def org(ctx, org_name: str, output_format: str, output: Optional[str],
         parallel: int, pattern: Optional[str], skip_archived: bool,
-        language: Optional[str], timeout: int, save: bool):
+        language: Optional[str], timeout: int, incremental: bool, save: bool):
     """审计组织下所有仓库"""
     from audit.core.batch_auditor import BatchAuditor
 
@@ -132,7 +134,8 @@ def org(ctx, org_name: str, output_format: str, output: Optional[str],
             language_filter=language,
             parallel=parallel,
             timeout=timeout,
-            verbose=ctx.obj["verbose"]
+            verbose=ctx.obj["verbose"],
+            incremental=incremental
         )
 
         results = auditor.audit()
@@ -194,6 +197,9 @@ def _save_report(repo_path_arg: str, results):
     saved = storage.save_report(org, repo, report_data)
     click.echo(f"✅ 报告已保存: {saved['json']}")
 
+    # 自动更新索引页
+    _update_index()
+
 
 def _save_org_report(org_name: str, results):
     """保存组织报告"""
@@ -222,6 +228,21 @@ def _save_org_report(org_name: str, results):
         saved = storage.save_report(org, repo, report_data)
         click.echo(f"  ✅ {repo}: {saved['json']}")
 
+    # 自动更新索引页
+    _update_index()
+
+
+def _update_index():
+    """更新报告索引页"""
+    try:
+        from audit.core.index_generator import IndexGenerator
+        generator = IndexGenerator()
+        generator.generate_index()
+    except Exception as e:
+        # 索引生成失败不应影响报告保存
+        import logging
+        logging.getLogger(__name__).warning(f"更新索引页失败: {e}")
+
 
 @cli.group()
 def tools():
@@ -230,19 +251,32 @@ def tools():
 
 
 @tools.command("install")
-def tools_install():
+@click.option("--force", is_flag=True, help="强制重新安装")
+def tools_install(force: bool):
     """安装所有分析工具"""
     installer = ToolInstaller()
     tools_to_install = ["eslint", "golangci-lint", "dotnet-format"]
 
     click.echo("📦 安装分析工具...")
+    success_count = 0
     for tool in tools_to_install:
-        click.echo(f"  安装 {tool}...")
+        # 检查是否已安装
+        if not force and installer.is_installed(tool):
+            version = installer.get_version(tool)
+            click.echo(f"  ✅ {tool}: 已安装 ({version})")
+            success_count += 1
+            continue
+
+        click.echo(f"  ⏳ 安装 {tool}...")
         success = installer.install(tool)
         if success:
-            click.echo(f"  ✅ {tool} 安装成功")
+            version = installer.get_version(tool)
+            click.echo(f"  ✅ {tool}: 安装成功 ({version})")
+            success_count += 1
         else:
-            click.echo(f"  ❌ {tool} 安装失败")
+            click.echo(f"  ❌ {tool}: 安装失败")
+
+    click.echo(f"\n安装完成: {success_count}/{len(tools_to_install)}")
 
 
 @tools.command("list")
@@ -277,19 +311,62 @@ def config_show():
 
 
 @config.command("validate")
-@click.option("--file", "-f", type=click.Path(exists=True), help="配置文件路径")
-def config_validate(file: Optional[str]):
+@click.option("--file", "-f", "file_path", type=click.Path(exists=True), help="配置文件路径")
+@click.option("--repo", "-r", type=click.Path(exists=True), help="仓库路径")
+def config_validate(file_path: Optional[str], repo: Optional[str]):
     """验证配置文件"""
+    import yaml
+
     config_manager = ConfigManager()
 
-    if file:
-        click.echo(f"🔍 验证配置文件: {file}")
-        # TODO: 实现配置文件验证
-        click.echo("✅ 配置文件格式正确")
+    if file_path:
+        click.echo(f"🔍 验证配置文件: {file_path}")
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                config = yaml.safe_load(f)
+
+            # 基础验证
+            if not isinstance(config, dict):
+                click.echo("❌ 配置文件格式错误: 必须是 YAML 字典")
+                return
+
+            # 检查必要字段
+            if 'version' not in config:
+                click.echo("⚠️  警告: 缺少 'version' 字段")
+
+            # 检查语言配置
+            if 'languages' in config:
+                for lang, lang_config in config['languages'].items():
+                    if not isinstance(lang_config, dict):
+                        click.echo(f"❌ 语言 {lang} 配置格式错误")
+                        return
+                    if 'enabled' not in lang_config:
+                        click.echo(f"⚠️  警告: 语言 {lang} 缺少 'enabled' 字段")
+
+            click.echo("✅ 配置文件格式正确")
+
+        except yaml.YAMLError as e:
+            click.echo(f"❌ YAML 解析错误: {e}")
+        except Exception as e:
+            click.echo(f"❌ 验证失败: {e}")
+
+    elif repo:
+        click.echo(f"🔍 验证仓库配置: {repo}")
+        try:
+            config_manager.load_repo_config(repo)
+            if config_manager.repo_config:
+                click.echo("✅ 仓库配置文件格式正确")
+                click.echo(f"  配置项: {list(config_manager.repo_config.keys())}")
+            else:
+                click.echo("ℹ️  仓库没有配置文件，使用全局配置")
+        except Exception as e:
+            click.echo(f"❌ 验证失败: {e}")
+
     else:
         click.echo("🔍 验证全局配置...")
         if config_manager.validate_config(config_manager.global_config):
             click.echo("✅ 全局配置格式正确")
+            click.echo(f"  配置项: {list(config_manager.global_config.keys())}")
         else:
             click.echo("❌ 全局配置格式错误")
 
@@ -337,6 +414,18 @@ def reports_clean(days: int):
     click.echo(f"🧹 清理 {days} 天前的报告...")
     cleaned = storage.clean_old_reports(days=days)
     click.echo(f"  ✅ 清理了 {cleaned} 个报告")
+
+
+@reports.command("index")
+def reports_index():
+    """生成/更新报告索引页"""
+    generator = IndexGenerator()
+    click.echo("📊 生成报告索引页...")
+    output_path = generator.generate_index()
+    if output_path:
+        click.echo(f"  ✅ 索引页已生成: {output_path}")
+    else:
+        click.echo("  ⚠️  未生成索引页（没有找到报告）")
 
 
 def main():
