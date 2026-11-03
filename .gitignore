@@ -1,6 +1,9 @@
 # Logs
 logs/**
 
+# Reports
+reports/**
+
 # Claude Code
 .claude/settings.local.json
 

@@ -12,14 +12,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Interactive menu
 fish src/main.fish
 
-# Batch clone
+# Batch clone (includes public + private repos)
 fish src/main.fish clone <org> [--pattern <glob>] [--list <repo1,repo2>]
 
 # Sync updates (supports parallel execution)
 fish src/main.fish sync [--dry-run] [-j N|--jobs N]
 
 # Export repo metadata as JSON
-fish src/main.fish export [--org <org>] [--output <file>] [--local]
+fish src/main.fish export [--org <org>] [--output <file>] [--local] [--languages]
 
 # Scan for deleted, renamed, or corrupted repos
 fish src/main.fish scan
@@ -49,7 +49,11 @@ fish src/main.fish --help
 
 - Pure Fish shell — no Python dependencies
 - `gh api` for all GitHub API calls, `jq` for JSON parsing/filtering
+- Clone fetches both public and private repos via `gh api "orgs/{org}/repos" -q type=all`
 - Clone and sync both support parallel execution via Fish job control
 - Sync uses configurable `-j/--jobs` flag (default: 1); spawns background Fish processes
+- Export supports optional language breakdown via `--languages` flag (calls `/repos/{org}/{repo}/languages` per repo)
+- Export outputs `primary_language` field (renamed from `language` for clarity)
+- Scan uses secondary verification with `git ls-remote` when `gh api` fails to avoid false positives
 - Error details are written to `logs/errors.log` (append-only), terminal shows summary only
 - Batch operations continue on failure; failed clones captured via per-repo temp stderr files

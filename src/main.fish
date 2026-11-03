@@ -6,7 +6,7 @@ function print_usage
     echo "Usage:"
     echo "  fish main.fish clone <org> [--pattern <glob>] [--list <repo1,repo2>]"
     echo "  fish main.fish sync [--dry-run] [-j N|--jobs N]"
-    echo "  fish main.fish export [--org <org>] [--output <file>] [--local]"
+    echo "  fish main.fish export [--org <org>] [--output <file>] [--local] [--languages]"
     echo "  fish main.fish scan"
     echo "  fish main.fish                   # interactive menu"
     echo
@@ -24,6 +24,7 @@ function print_usage
     echo "  --org       Organization name for export"
     echo "  --output    Write export to file instead of stdout"
     echo "  --local     Export only locally cloned repos"
+    echo "  --languages Include language breakdown (slower, additional API calls)"
 end
 
 function show_menu
@@ -138,12 +139,19 @@ function handle_export_menu
     set -l local
     read local
 
+    printf "  Include language breakdown? [y/N]: "
+    set -l languages
+    read languages
+
     set -l cmd "fish (dirname (status -f))/commands/export.fish --org $org"
     if test -n "$output"
         set cmd "$cmd --output '$output'"
     end
     if string match -qi 'y*' "$local"
         set cmd "$cmd --local"
+    end
+    if string match -qi 'y*' "$languages"
+        set cmd "$cmd --languages"
     end
 
     eval $cmd
