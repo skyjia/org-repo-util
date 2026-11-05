@@ -41,6 +41,22 @@ def _git(repo: Path, *args: str) -> str:
     return proc.stdout.strip()
 
 
+def check_fork(org: str, repo: str) -> tuple[bool | None, str | None]:
+    """fork 预检（M7 用户决策：fork 仓库完全不分析）。
+
+    返回 (is_fork, note)；gh api 不可达时 (None, 原因)——放行并在任务事件中标注。
+    """
+    try:
+        proc = subprocess.run(
+            ["gh", "api", f"repos/{org}/{repo}", "--jq", ".fork"],
+            capture_output=True, text=True, timeout=30)
+        if proc.returncode == 0:
+            return proc.stdout.strip() == "true", None
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        pass
+    return None, "gh api 不可达：fork 预检跳过（如为 fork 仓库，报告中请人工甄别）"
+
+
 def create_analysis_task(target: str, ref: str | None = None,
                          mock: bool = False, store: TaskStore | None = None,
                          start_daemon: bool = True) -> Task:
@@ -50,6 +66,15 @@ def create_analysis_task(target: str, ref: str | None = None,
     repo_path = config.REPOS_DIR / org / repo
     if not repo_path.exists():
         raise ServiceError(f"仓库未克隆: {repo_path}（先执行 fish src/main.fish clone {org}）")
+
+    # fork 预检（用户决策 2026-11-05：fork 仓库完全不分析）
+    fork_note = None
+    if config.FORK_POLICY_REJECT and not mock:
+        is_fork, fork_note = check_fork(org, repo)
+        if is_fork:
+            raise ServiceError(
+                f"fork 仓库按策略不分析（需求方决策 2026-11-05）: {org}/{repo}；"
+                f"如需分析请调整 config.FORK_POLICY_REJECT")
 
     if ref:
         _git(repo_path, "rev-parse", "--verify", f"{ref}^{{commit}}")  # 校验 ref 有效
@@ -64,6 +89,8 @@ def create_analysis_task(target: str, ref: str | None = None,
                 commit_sha=commit_sha, mock=mock)
     task.subtasks = {s.name: SubtaskState(name=s.name, type=s.type) for s in SUBTASK_SPECS}
     store.create_task(task)
+    if fork_note:
+        store.append_event(task.task_id, "log", message=fork_note)
 
     if start_daemon:
         daemon_mod.ensure_daemon(store)

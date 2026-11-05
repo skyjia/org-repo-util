@@ -102,6 +102,18 @@ class Orchestrator:
                 if st.status == SubtaskStatus.COMPLETED:
                     continue  # 幂等重入：跳过已完成
 
+                # 空仓库守护（M7 T701）：无有效代码时跳过全部 AI 子任务与评分，
+                # archive 照常执行产出简版报告（零 AI 成本，用户决策 2026-11-05）
+                if spec.type == "ai" or spec.name == "scoring":
+                    guard = self._no_code_guard(task)
+                    if guard:
+                        st.status = SubtaskStatus.SKIPPED
+                        st.skip_reason = guard
+                        self.store.save_task(task)
+                        self.store.append_event(task.task_id, "subtask_skipped",
+                                                subtask=name, message=guard)
+                        continue
+
                 # 依赖检查
                 blocked_by = self._failed_deps(task, spec)
                 if blocked_by and not spec.always_run:
@@ -245,6 +257,21 @@ class Orchestrator:
             signal.signal(signal.SIGALRM, old_handler)
 
     # ---------- 依赖 / 收尾 ----------
+    def _no_code_guard(self, task: Task) -> str | None:
+        """空仓库守护检查：生产代码行 < 阈值 → 返回 skip 原因；否则 None"""
+        path = self.store.task_dir(task.task_id) / "collected" / "structure.json"
+        if not path.exists():
+            return None    # structure 未完成/失败 → 交给依赖阻塞逻辑
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return None
+        prod_lines = ((data.get("categories") or {}).get("production") or {}).get("lines")
+        if prod_lines is not None and prod_lines < config.NO_CODE_THRESHOLD:
+            return (f"空仓库守护：生产代码仅 {prod_lines} 行（< {config.NO_CODE_THRESHOLD}），"
+                    f"跳过 AI 分析（文档/配置类仓库，零 AI 成本）")
+        return None
+
     @staticmethod
     def _failed_deps(task: Task, spec: SubtaskSpec) -> list[str]:
         bad = []

@@ -106,6 +106,9 @@ ul.tight{margin:6px 0;padding-left:22px}ul.tight li{margin:3px 0}
 <span>耗时 {{ meta.duration_seconds or '?' }}s</span>
 <span>生成器 {{ (meta.generator or {}).name }} v{{ (meta.generator or {}).version }}</span>
 </div>
+{% if meta.repository_class == 'documentation_or_empty' %}
+<div class="missing">📄 <b>文档类 / 空仓库</b>：生产代码不足 {{ 100 }} 行，已按守护策略跳过 AI 分析（零 AI 成本）。本报告为简版：含采集数据与仓库性质说明，无架构 / 业务知识 / 结论章节。</div>
+{% endif %}
 <details><summary>数据来源与局限声明（纯静态分析）</summary>
 <ul class="tight">
 {% for l in (meta.limitations or []) %}<li>{{ l }}</li>{% endfor %}
@@ -156,7 +159,8 @@ ul.tight{margin:6px 0;padding-left:22px}ul.tight li{margin:3px 0}
 <tr><td>最近更新</td><td>{{ gh.pushed_at or gh.updated_at or '未获取' }}</td><td>GitHub API</td></tr>
 <tr><td>首次 commit</td><td>{{ g.first_commit_at or '—' }}</td><td>本地 git</td></tr>
 <tr><td>最近 commit</td><td>{{ g.last_commit_at or '—' }}</td><td>本地 git</td></tr>
-<tr><td>主要语言</td><td>{{ gh.primary_language or '—' }}</td><td>GitHub API</td></tr>
+{% set prim_lang = gh.primary_language or (((report.chapters.structure.data or {}).primary_language) if report.chapters.structure else none) %}
+<tr><td>主要语言</td><td>{{ prim_lang or '—' }}</td><td>{{ 'GitHub API' if gh.primary_language else '本地统计推断' }}</td></tr>
 <tr><td>默认分支</td><td>{{ gh.default_branch or '—' }}</td><td>GitHub API</td></tr>
 <tr><td>最近标签</td><td>{{ (g.recent_tags or [])|join(', ') or '—' }}</td><td>本地 git</td></tr>
 </table>

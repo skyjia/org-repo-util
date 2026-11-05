@@ -63,18 +63,24 @@ def is_generated(path: Path) -> bool:
 
 
 def is_test_path(rel: Path) -> bool:
-    """按路径/命名约定判断测试代码"""
+    """按路径/命名约定判断测试代码（覆盖 Go/JS/TS/Python/C#/Java/Dart/Ruby/Shell）"""
     parts = {p.lower() for p in rel.parts[:-1]}
     if parts & {"test", "tests", "__tests__", "spec", "specs", "e2e", "cypress"}:
         return True
     name = rel.name
     return (
         name.endswith("_test.go")
+        or name.endswith("_test.dart")                  # Dart/Flutter
+        or name.endswith(".bats")                       # Shell (bats)
+        or (name.endswith("_test.sh") or name.endswith("_spec.sh"))
         or ".test." in name or ".spec." in name
         or (name.startswith("test_") and name.endswith(".py"))
         or (name.startswith("Test") and name.endswith(".cs"))
         or (name.endswith("Tests.cs") or name.endswith("Test.cs"))
         or (name.startswith("Test") and name.endswith(".java"))
+        or ((name.startswith("test_") or name.endswith("_test.rb"))
+            and name.endswith(".rb"))                   # Ruby (rspec/minitest 约定)
+        or (name.endswith("_spec.rb"))
     )
 
 

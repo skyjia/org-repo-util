@@ -17,6 +17,23 @@ from analysis.collectors.base import (
 OSV_BATCH_URL = "https://api.osv.dev/v1/querybatch"
 OSV_MAX_QUERIES = 200
 
+# manifest → OSV 生态（M7 扩展：Pub/Maven/RubyGems）
+OSV_ECOSYSTEM_BY_MANIFEST = {
+    "package.json": "npm",
+    "package-lock.json": "npm",
+    "go.mod": "Go",
+    "*.csproj": "NuGet",
+    "packages.lock.json": "NuGet",
+    "requirements.txt/pyproject.toml": "PyPI",
+    "uv.lock": "PyPI",
+    "poetry.lock": "PyPI",
+    "pubspec.yaml": "Pub",
+    "pom.xml": "Maven",
+    "build.gradle": "Maven",
+    "Gemfile": "RubyGems",
+    "Gemfile.lock": "RubyGems",
+}
+
 # (名称, 正则, 严重度, 适用扩展名集合, 说明)
 DANGER_PATTERNS = [
     ("private_key_material", re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----"),
@@ -46,22 +63,49 @@ DANGER_PATTERNS = [
      "low", {".py", ".js", ".ts", ".go", ".cs", ".java"}, "SELECT 无 LIMIT（潜在全表拉取）"),
     ("weak_hash", re.compile(r"\b(?:md5|sha1)\s*\("), "low", None,
      "弱哈希（若用于口令存储应升级 bcrypt/argon2）"),
+    # ---- M7 多语言扩展 ----
+    ("py_yaml_unsafe_load", re.compile(r"yaml\.load\s*\((?![^)]*Loader\s*=)"), "high", {".py"},
+     "yaml.load 未指定安全 Loader（反序列化 RCE 风险，应用 safe_load）"),
+    ("py_ssl_verify_disabled", re.compile(r"verify\s*=\s*False"), "medium", {".py"},
+     "禁用 SSL 证书校验"),
+    ("py_ssti_risk", re.compile(r"render_template_string\s*\(|jinja2\.Template\s*\("), "high", {".py"},
+     "动态模板渲染（SSTI 风险，确认模板源非用户输入）"),
+    ("shell_eval", re.compile(r"^\s*eval\s+[\"'$]"), "high", {".sh", ".bash"},
+     "shell eval 动态执行"),
+    ("shell_curl_pipe_exec", re.compile(r"(curl|wget)\s[^|;&]*\|\s*(sudo\s+)?(ba|z|da)?sh"),
+     "critical", {".sh", ".bash", ".md"}, "远程脚本直接管道执行（curl|bash）"),
+    ("shell_rm_unquoted_var", re.compile(r"rm\s+(-[rf]+\s+)+[^\"']*\$\{?\w"), "high", {".sh", ".bash"},
+     "rm -rf 使用未引号变量（变量为空时展开风险）"),
+    ("shell_chmod_777", re.compile(r"chmod\s+(-R\s+)?777"), "medium", {".sh", ".bash"},
+     "chmod 777（过宽权限）"),
+    ("dart_process_run", re.compile(r"Process\.(run|start|runSync)\s*\("), "high", {".dart"},
+     "进程执行（确认参数非用户可控）"),
+    ("dart_mirrors", re.compile(r"import\s+'dart:mirrors'"), "medium", {".dart"},
+     "dart:mirrors 动态反射"),
+    ("java_runtime_exec", re.compile(r"Runtime\.getRuntime\(\)\s*\.exec\s*\(|new\s+ProcessBuilder\s*\("),
+     "high", {".java"}, "命令执行（确认参数非用户可控）"),
+    ("java_deserialization", re.compile(r"new\s+ObjectInputStream\s*\("), "high", {".java"},
+     "Java 原生反序列化（RCE 风险，避免不可信数据）"),
+    ("java_sql_concat", re.compile(r"(createStatement\(\)|executeQuery|executeUpdate)\s*\([^)]*\"\s*\+"),
+     "high", {".java"}, "SQL 字符串拼接（注入风险，应用 PreparedStatement）"),
+    ("ruby_eval", re.compile(r"\b(eval|instance_eval|class_eval|module_eval)\s*[\(\"']"), "high", {".rb"},
+     "Ruby 动态执行"),
+    ("ruby_marshal_load", re.compile(r"Marshal\.load\s*\("), "high", {".rb"},
+     "Marshal 反序列化（RCE 风险）"),
+    ("ruby_system_interp", re.compile(r"\b(system|exec|%x)\s*[\(\"'].*#\{"), "medium", {".rb"},
+     "命令字符串插值（注入风险）"),
 ]
 
 MAX_HITS_PER_PATTERN = 100
 
 
 def _osv_query(deps: dict[str, dict]) -> dict:
-    """OSV querybatch：仅精确版本（REQ §3.5 查询式匹配）"""
-    ecosystem_by_manifest = {
-        "package.json": "npm", "go.mod": "Go", "*.csproj": "NuGet",
-        "requirements.txt/pyproject.toml": "PyPI",
-    }
+    """OSV querybatch：仅精确版本（REQ §3.5 查询式匹配）；生态映射见 OSV_ECOSYSTEM_BY_MANIFEST"""
     queries = []
     meta = []
     for name, info in deps.items():
         ver = str(info.get("version", "")).strip()
-        eco = ecosystem_by_manifest.get(info.get("manifest", ""))
+        eco = OSV_ECOSYSTEM_BY_MANIFEST.get(info.get("manifest", ""))
         if not eco or not re.match(r"^v?\d+\.\d+", ver):
             continue  # 范围版本/未知生态跳过
         queries.append({"package": {"name": name.lstrip("v") if eco == "Go" else name,
@@ -141,14 +185,25 @@ class SecurityCollector(Collector):
         out["dependency_vulnerabilities"] = _osv_query(deps) if deps else not_found(
             "依赖漏洞匹配", "未采集到外部依赖清单")
 
+        # ---- 2b. ruff bandit（S 系列）安全规则：优先复用 quality 产物，避免二次运行 ----
+        quality_out = ctx.read_dependency_output("collect.quality") or {}
+        bandit = ((quality_out.get("local_lint") or {}).get("ruff") or {}).get("bandit_security_rules")
+        if bandit is None:
+            from analysis.collectors.lint_tools import run_ruff
+            ruff_res = run_ruff(root)
+            bandit = (ruff_res or {}).get("bandit_security_rules")
+        out["python_bandit_rules"] = bandit or not_found(
+            "ruff bandit 规则结果", "非 Python 仓库或 ruff 不可用")
+
         # ---- 3. 危险模式静态启发式 ----
         hits_by_pattern: dict[str, list] = {}
         for path in iter_files(root):
             rel = path.relative_to(root)
             ext = path.suffix.lower()
             if ext not in {".js", ".jsx", ".ts", ".tsx", ".vue", ".py", ".go", ".cs",
-                           ".java", ".rb", ".php", ".sh", ".yml", ".yaml", ".json",
-                           ".sql", ".html", ".xml", ".conf", ".env", ".toml"}:
+                           ".java", ".rb", ".php", ".sh", ".bash", ".dart", ".kt",
+                           ".yml", ".yaml", ".json",
+                           ".sql", ".html", ".xml", ".conf", ".env", ".toml", ".md"}:
                 continue
             lines = read_lines(path)
             if lines is None:
@@ -171,9 +226,17 @@ class SecurityCollector(Collector):
                             "evidence": line.strip()[:160],
                         })
 
+        # 按 pattern 声明 severity 聚合全量计数（评分用，不受 sample 截断影响）
+        pattern_sev = {p[0]: p[2] for p in DANGER_PATTERNS}
+        sev_counter: dict[str, int] = {}
+        for pname, bucket in hits_by_pattern.items():
+            sev = pattern_sev.get(pname, "medium")
+            sev_counter[sev] = sev_counter.get(sev, 0) + len(bucket)
+
         out["static_heuristics"] = {
             "boundary_note": "静态正则启发式，存在误报可能，命中项需人工复核（REQ §3.5）",
             "patterns_matched": {k: len(v) for k, v in hits_by_pattern.items()},
+            "by_severity": sev_counter,
             "hits": {k: v[:20] for k, v in hits_by_pattern.items()},
         }
 

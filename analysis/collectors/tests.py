@@ -23,7 +23,11 @@ TEST_STEP_PATTERN = re.compile(
     re.I)
 
 COVERAGE_ARTIFACTS = ("coverage/lcov.info", "coverage/coverage-final.json", "coverage.xml",
-                      "cover.out", "coverage/index.html", ".coverage", "lcov.info")
+                      "cover.out", "coverage/index.html", ".coverage", "lcov.info",
+                      # M7: Java jacoco / Ruby simplecov / Python htmlcov
+                      "target/site/jacoco/jacoco.xml",
+                      "build/reports/jacoco/test/jacocoTestReport.xml",
+                      "coverage/.resultset.json", "htmlcov/index.html")
 
 
 def _detect_frameworks(root: Path) -> dict:
@@ -63,6 +67,32 @@ def _detect_frameworks(root: Path) -> dict:
         for fw in ("pytest", "unittest"):
             if fw in text.lower():
                 found[fw] = True
+    # ---- M7: Dart / Java / Ruby / Shell ----
+    pubspec = root / "pubspec.yaml"
+    if pubspec.exists():
+        try:
+            import yaml
+            data = yaml.safe_load(pubspec.read_text(errors="replace")) or {}
+            all_deps = {**(data.get("dependencies") or {}), **(data.get("dev_dependencies") or {})}
+            for fw in ("flutter_test", "test", "mockito", "integration_test", "build_runner"):
+                if fw in all_deps:
+                    found[fw] = all_deps[fw] if isinstance(all_deps[fw], str) else True
+        except Exception:
+            pass
+    for build_file in list(root.glob("pom.xml")) + list(root.glob("*/pom.xml")) \
+            + list(root.glob("build.gradle*")) + list(root.glob("*/build.gradle*")):
+        text = build_file.read_text(encoding="utf-8", errors="replace")
+        for fw in ("junit", "mockito", "testng", "surefire", "spock"):
+            if fw in text.lower():
+                found.setdefault(fw, True)
+    gemfile = root / "Gemfile"
+    if gemfile.exists():
+        text = gemfile.read_text(encoding="utf-8", errors="replace").lower()
+        for fw in ("rspec", "minitest", "cucumber", "rubocop"):
+            if fw in text:
+                found[fw] = True
+    if next(root.rglob("*.bats"), None):
+        found["bats"] = True
     return found
 
 

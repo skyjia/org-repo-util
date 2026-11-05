@@ -32,6 +32,14 @@ HEARTBEAT_INTERVAL = 10         # daemon 心跳写入间隔（秒）
 RETRY_DELAY_DET = 5             # 确定性子任务重试前退避（秒，容忍网络瞬断）
 RETRY_DELAY_AI = 30             # AI 子任务重试前退避（秒）
 
+# ---------- 多语言支持（M7，2026-11-05 用户确认决策） ----------
+NO_CODE_THRESHOLD = 100         # 生产代码行低于此值 → 空仓库守护：跳过全部 AI 子任务
+RUFF_SELECT = "E,F,W,S,B"       # ruff 规则集（S=bandit 安全规则，供 security 维度复用）
+RUFF_TIMEOUT = 240
+SHELLCHECK_TIMEOUT = 240
+SHELLCHECK_MAX_FILES = 300      # shell 文件送检上限
+FORK_POLICY_REJECT = True       # fork 仓库 start 预检拒绝（用户决策：完全不分析）
+
 # ---------- Web ----------
 WEB_HOST = "127.0.0.1"          # 仅本机（REQ §4.3）
 WEB_PORT = 8765

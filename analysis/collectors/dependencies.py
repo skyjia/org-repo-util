@@ -91,6 +91,89 @@ def _parse_python(root: Path) -> dict:
     return {"runtime": deps, "development": {}}
 
 
+# ---------- M7 扩展：Dart / Java / Ruby ----------
+
+def _parse_pubspec(root: Path) -> dict:
+    """Dart/Flutter pubspec.yaml"""
+    p = root / "pubspec.yaml"
+    if not p.exists():
+        return {"runtime": {}, "development": {}}
+    try:
+        import yaml
+        data = yaml.safe_load(p.read_text(encoding="utf-8", errors="replace")) or {}
+    except Exception:
+        return {"runtime": {}, "development": {}}
+    def _norm(d):
+        out = {}
+        for name, spec in (d or {}).items():
+            if isinstance(spec, dict):
+                out[name] = spec.get("version") or "(source-ref)"
+            else:
+                out[name] = str(spec) if spec else "(any)"
+        return out
+    return {"runtime": _norm(data.get("dependencies")),
+            "development": _norm(data.get("dev_dependencies"))}
+
+
+def _parse_pom(root: Path) -> dict:
+    """Java Maven pom.xml（含 modules 的 dependency 段；属性引用版本标注）"""
+    deps = {}
+    poms = [root / "pom.xml"] + [p for p in root.glob("*/pom.xml") if p != root / "pom.xml"]
+    for pom in poms[:10]:
+        if not pom.exists():
+            continue
+        text = pom.read_text(encoding="utf-8", errors="replace")
+        for m in re.finditer(
+                r"<dependency>\s*<groupId>([^<]+)</groupId>\s*<artifactId>([^<]+)</artifactId>"
+                r"(?:\s*<version>([^<]+)</version>)?", text, re.S):
+            gid, aid, ver = m.group(1).strip(), m.group(2).strip(), (m.group(3) or "").strip()
+            key = f"{gid}:{aid}"
+            deps[key] = ver if ver and not ver.startswith("$") else "(property-ref)"
+    return {"runtime": deps, "development": {}}
+
+
+def _parse_gradle(root: Path) -> dict:
+    """Java/Kotlin Gradle build 文件（implementation/api/testImplementation 声明）"""
+    deps, dev = {}, {}
+    files = list(root.glob("build.gradle*")) + list(root.glob("*/build.gradle*"))
+    pat = re.compile(
+        r"(implementation|api|compileOnly|runtimeOnly|testImplementation|testCompileOnly)"
+        r"[\s(]+['\"]([\w.\-]+):([\w.\-]+):([\w.\-+${}]+)['\"]")
+    for f in files[:10]:
+        text = f.read_text(encoding="utf-8", errors="replace")
+        for m in pat.finditer(text):
+            kind, gid, aid, ver = m.groups()
+            key = f"{gid}:{aid}"
+            ver_clean = ver if not ver.startswith("$") else "(property-ref)"
+            (dev if "test" in kind.lower() else deps)[key] = ver_clean
+    return {"runtime": deps, "development": dev}
+
+
+def _parse_gemfile(root: Path) -> dict:
+    """Ruby Gemfile（声明）+ Gemfile.lock（精确版本优先，OSV 可查）"""
+    deps = {}
+    lock = root / "Gemfile.lock"
+    if lock.exists():
+        text = lock.read_text(encoding="utf-8", errors="replace")
+        in_specs = False
+        for line in text.splitlines():
+            if line.strip() == "specs:":
+                in_specs = True
+                continue
+            if in_specs:
+                m = re.match(r"^ {4}(\S+) \(([\d.]+[\w.]*)\)", line)
+                if m:
+                    deps[m.group(1)] = m.group(2)
+                elif line.strip() and not line.startswith("    "):
+                    in_specs = False
+    gemfile = root / "Gemfile"
+    if gemfile.exists() and not deps:
+        for m in re.finditer(r"gem\s+['\"]([\w.\-]+)['\"](?:\s*,\s*['\"]([^'\"]+)['\"])?",
+                             gemfile.read_text(encoding="utf-8", errors="replace")):
+            deps[m.group(1)] = m.group(2) or "(unpinned)"
+    return {"runtime": deps, "development": {}}
+
+
 def _pinned_ratio(deps: dict) -> float | None:
     versions = [v for v in deps.values() if isinstance(v, str) and v]
     if not versions:
@@ -166,6 +249,83 @@ def _graph_csproj(root: Path) -> dict | None:
     return {"tool": "csproj ProjectReference", "nodes": nodes, "edges": edges}
 
 
+def _graph_dart(root: Path) -> dict | None:
+    """Dart 包级依赖图：pubspec name → import 'package:x/...'"""
+    pubspec = root / "pubspec.yaml"
+    if not pubspec.exists():
+        return None
+    try:
+        import yaml
+        self_name = (yaml.safe_load(pubspec.read_text(errors="replace")) or {}).get("name")
+    except Exception:
+        self_name = None
+    if not self_name:
+        return None
+    imports: set[str] = set()
+    count = 0
+    for p in root.rglob("*.dart"):
+        if any(x in p.parts for x in (".git", "build", ".dart_tool")):
+            continue
+        count += 1
+        if count > 1500:
+            break
+        try:
+            text = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for m in re.finditer(r"import\s+'package:([\w_]+)/", text):
+            if m.group(1) != self_name:
+                imports.add(m.group(1))
+    nodes = [{"id": self_name}] + [{"id": i} for i in sorted(imports)]
+    edges = [{"source": self_name, "target": i} for i in sorted(imports)]
+    return {"tool": "pubspec + package import", "nodes": nodes, "edges": edges}
+
+
+def _graph_shell(root: Path) -> dict | None:
+    """Shell source/. 调用图（脚本级）"""
+    scripts = [p for p in root.rglob("*.sh")
+               if not any(x in p.parts for x in ("node_modules", ".git", "vendor"))][:300]
+    if len(scripts) < 2:
+        return None
+    nodes, edges = [], []
+    names = {p.name for p in scripts}
+    for p in scripts:
+        rel = str(p.relative_to(root))
+        nodes.append({"id": rel})
+        try:
+            text = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for m in re.finditer(r"^\s*(?:source|\.)\s+[\"']?([^\s\"';#]+)", text, re.M):
+            target = m.group(1).split("/")[-1].replace("$", "")
+            for cand in names:
+                if cand.endswith(target) or target.endswith(cand):
+                    tgt_rel = str(next(p2 for p2 in scripts if p2.name == cand).relative_to(root))
+                    if tgt_rel != rel:
+                        edges.append({"source": rel, "target": tgt_rel})
+                    break
+    if not edges:
+        return {"tool": "shell source graph", "nodes": nodes[:100], "edges": [],
+                "note": "未检测到脚本间 source 调用（独立脚本集）"}
+    return {"tool": "shell source graph", "nodes": nodes[:150], "edges": edges[:300]}
+
+
+def _graph_java(root: Path) -> dict | None:
+    """Java Maven 多模块图（parent → modules）"""
+    pom = root / "pom.xml"
+    if not pom.exists():
+        return None
+    text = pom.read_text(encoding="utf-8", errors="replace")
+    m = re.search(r"<artifactId>([^<]+)</artifactId>", text)
+    parent = m.group(1).strip() if m else "parent"
+    modules = re.findall(r"<module>([^<]+)</module>", text)
+    if not modules:
+        return None
+    nodes = [{"id": parent}] + [{"id": mod.strip()} for mod in modules]
+    edges = [{"source": parent, "target": mod.strip()} for mod in modules]
+    return {"tool": "maven modules", "nodes": nodes, "edges": edges}
+
+
 def _graph_python(root: Path) -> dict | None:
     """Python 本地模块 import 图（正则启发式）"""
     modules: dict[str, set] = {}
@@ -199,11 +359,15 @@ class DependenciesCollector(Collector):
         manifests = []
         external: dict[str, dict] = {}
 
-        for name, parser, marker in (
-                ("package.json", _parse_package_json, "package.json"),
-                ("go.mod", _parse_go_mod, "go.mod"),
-                ("*.csproj", _parse_csproj, None),
-                ("requirements.txt/pyproject.toml", _parse_python, None)):
+        for name, parser in (
+                ("package.json", _parse_package_json),
+                ("go.mod", _parse_go_mod),
+                ("*.csproj", _parse_csproj),
+                ("requirements.txt/pyproject.toml", _parse_python),
+                ("pubspec.yaml", _parse_pubspec),
+                ("pom.xml", _parse_pom),
+                ("build.gradle", _parse_gradle),
+                ("Gemfile.lock", _parse_gemfile)):
             detected = parser(root)
             has = any(detected.values())
             if has:
@@ -212,7 +376,7 @@ class DependenciesCollector(Collector):
                     for dep, ver in deps.items():
                         external[dep] = {"version": ver, "kind": kind, "manifest": name}
 
-        # 依赖图：按检测到的生态依次尝试
+        # 依赖图：按检测到的生态依次尝试（M7 扩展 Dart/Java/Shell）
         graph = None
         graph_note = None
         if (root / "package.json").exists():
@@ -223,10 +387,16 @@ class DependenciesCollector(Collector):
             graph = _graph_go(root)
             if not graph:
                 graph_note = "go 工具链不可用：模块依赖图省略"
-        if not graph and list(root.rglob("*.csproj")):
+        if not graph and list(root.rglob("*.csproj"))[:1]:
             graph = _graph_csproj(root)
-        if not graph and list(root.rglob("*.py"))[:1]:
+        if not graph and (root / "pubspec.yaml").exists():
+            graph = _graph_dart(root)
+        if not graph and (root / "pom.xml").exists():
+            graph = _graph_java(root)
+        if not graph and next(root.rglob("*.py"), None):
             graph = _graph_python(root)
+        if not graph and next(root.rglob("*.sh"), None):
+            graph = _graph_shell(root)
 
         all_deps = {d: v for d, v in external.items()}
         unpinned = [d for d, v in all_deps.items()

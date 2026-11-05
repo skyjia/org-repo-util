@@ -289,6 +289,18 @@ def doctor():
         checks.append((f"vendor:{f}", (vendor / f).exists(),
                        "" if (vendor / f).exists() else "缺失（归档报告将回退 CDN，非自包含）"))
 
+    # M7 本地 lint 工具
+    try:
+        ruff_v = subprocess.run([sys.executable, "-m", "ruff", "--version"],
+                                capture_output=True, text=True, timeout=15)
+        checks.append(("lint:ruff", ruff_v.returncode == 0,
+                       ruff_v.stdout.strip()[:40] if ruff_v.returncode == 0 else "未安装（uv pip install ruff）"))
+    except Exception:
+        checks.append(("lint:ruff", False, "检测失败"))
+    sc = shutil.which("shellcheck")
+    checks.append(("lint:shellcheck", bool(sc),
+                   "" if sc else "未安装（brew install shellcheck）；Shell 仓库 lint 将兜底标注"))
+
     ok = 0
     for name, passed, note in checks:
         if passed:

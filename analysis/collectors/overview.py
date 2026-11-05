@@ -1,4 +1,8 @@
-"""collect.overview — 仓库概述（REQ §3.1）：gh api + git，API 失败降级纯 git"""
+"""collect.overview — 仓库概述（REQ §3.1）：gh api + git，API 失败降级 export 快照/纯 git
+
+M7：优先复用 repos/<org>-summary.json（fish export --languages 产物）作为语言分布
+数据源与 API 降级快照，节省 gh api 调用并支持离线。
+"""
 
 from __future__ import annotations
 
@@ -6,10 +10,25 @@ import json
 import subprocess
 
 from analysis.collectors.base import Collector, collector, not_found
+from analysis.core import config
 
 
 def _run(cmd: list[str], timeout: int = 60) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+
+
+def _summary_entry(org: str, repo: str) -> dict | None:
+    """读取 export 快照中该仓库条目（含 primary_language + languages 比重分布）"""
+    p = config.REPOS_DIR / f"{org}-summary.json"
+    if not p.exists():
+        return None
+    try:
+        for r in json.loads(p.read_text(encoding="utf-8")):
+            if r.get("name") == repo:
+                return r
+    except (json.JSONDecodeError, OSError):
+        pass
+    return None
 
 
 def _gh_api(endpoint: str) -> dict | None:
@@ -51,7 +70,8 @@ class OverviewCollector(Collector):
             "recent_tags": _git(repo, "tag", "--sort=-creatordate").splitlines()[:10],
         }
 
-        # ---- GitHub API（REQ §2.2-3；失败降级并标注，REQ 第 7 章） ----
+        # ---- GitHub API（REQ §2.2-3；失败降级 export 快照/纯 git，REQ 第 7 章） ----
+        entry = _summary_entry(ctx.org, ctx.repo)
         api = _gh_api(f"repos/{ctx.org}/{ctx.repo}")
         if api:
             out["github"] = {
@@ -66,6 +86,7 @@ class OverviewCollector(Collector):
                 "default_branch": api.get("default_branch"),
                 "visibility": api.get("visibility"),
                 "archived": api.get("archived"),
+                "fork": api.get("fork"),
                 "homepage": api.get("homepage"),
             }
             # 创建时间交叉验证（REQ §3.1）
@@ -77,13 +98,37 @@ class OverviewCollector(Collector):
                     "git_first_commit_at": first,
                     "note": "GitHub 创建时间与本地首次 commit 时间不一致（可能经历过迁移/重建）",
                 }
-            langs = _gh_api(f"repos/{ctx.org}/{ctx.repo}/languages")
-            out["languages"] = langs if langs else not_found(
-                "语言构成", "gh api languages 未返回数据，可检查仓库是否为空或 gh 权限")
+            # 语言分布：优先 export 快照（--languages 产物，免二次 API 调用），API 兜底
+            if entry and entry.get("languages"):
+                out["languages"] = entry["languages"]
+                out["languages_source"] = f"repos/{ctx.org}-summary.json（export 快照）"
+            else:
+                langs = _gh_api(f"repos/{ctx.org}/{ctx.repo}/languages")
+                out["languages"] = langs if langs else not_found(
+                    "语言构成", "gh api languages 未返回数据，可检查仓库是否为空或 gh 权限")
+                out["languages_source"] = "gh api"
+            if not out["github"]["primary_language"] and entry:
+                out["github"]["primary_language"] = entry.get("primary_language")
+        elif entry:
+            out["github"] = {
+                "found": "snapshot",
+                "source": f"repos/{ctx.org}-summary.json（export 快照，可能滞后；gh api 不可达）",
+                "description": entry.get("description"),
+                "created_at": None,
+                "pushed_at": entry.get("pushed_at"),
+                "size_kb": entry.get("size"),
+                "primary_language": entry.get("primary_language"),
+                "archived": entry.get("archived"),
+                "visibility": entry.get("visibility"),
+            }
+            out["languages"] = entry.get("languages") or not_found(
+                "语言构成", "快照中无 languages 数据（export 时未加 --languages）")
+            out["languages_source"] = "export 快照"
         else:
             out["github"] = not_found(
                 "GitHub 元数据",
-                "gh 未认证或 API 不可达：运行 gh auth login；仓库描述/创建时间/大小等平台数据未获取，"
+                "gh 未认证或 API 不可达且无 export 快照：运行 gh auth login 或 "
+                "fish src/main.fish export --org <org> --languages；"
                 "本次分析已降级为纯本地 git 数据")
             out["languages"] = {"found": False, "note": "依赖 GitHub API，未获取（可由 structure 采集的本地统计替代）"}
 

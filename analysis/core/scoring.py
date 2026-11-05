@@ -98,6 +98,8 @@ def _score_quality(d: Optional[dict]) -> dict:
     score = 100.0
     factors = []
     lint = d.get("style_lint", {})
+    local = ((d.get("local_lint") or {}).get("merged")
+             if isinstance(d.get("local_lint"), dict) else None)
     if lint.get("source") == "audit":
         kloc = max((lint.get("lines_scanned") or 0) / 1000, 0.1) if lint.get("lines_scanned") else 1
         sev = lint.get("by_severity", {})
@@ -107,8 +109,18 @@ def _score_quality(d: Optional[dict]) -> dict:
         score += impact
         factors.append(_f("lint 问题密度", impact,
                           f"audit 桥接：{lint.get('total', 0)} 个问题 / {kloc:.1f} KLOC（high×3 + medium×1 加权）"))
+    elif local and local.get("total") is not None:
+        # M7：audit 未覆盖语言 → 本地工具（ruff/shellcheck）密度计分
+        kloc = max((local.get("lines_scanned") or 0) / 1000, 0.1) if local.get("lines_scanned") else 1
+        sev = local.get("by_severity", {})
+        density = (sev.get("high", 0) * 3 + sev.get("medium", 0) * 1
+                   + sev.get("low", 0) * 0.3 + sev.get("info", 0) * 0.1) / kloc
+        impact = -min(35, round(density * 2, 1))
+        score += impact
+        factors.append(_f("lint 问题密度（本地工具）", impact,
+                          f"ruff/shellcheck：{local.get('total', 0)} 个问题 / {kloc:.1f} KLOC"))
     else:
-        factors.append(_f("lint 数据缺失", 0, "audit 产物不可用，本项不计扣分（结论中已标注数据缺失）"))
+        factors.append(_f("lint 数据缺失", 0, "audit 产物与本地 lint 均不可用，本项不计扣分（结论中已标注数据缺失）"))
     cx = d.get("complexity", {})
     if isinstance(cx, dict) and cx.get("functions_analyzed"):
         hr = cx.get("high_ccn_ratio") or 0
@@ -153,19 +165,33 @@ def _score_security(d: Optional[dict]) -> dict:
         impact = -min(25, sev.get("high", 0) * 3 + sev.get("medium", 0) * 1)
         score += impact
         factors.append(_f("audit 安全问题", impact, f"桥接 audit：{audit_sec.get('total')} 个安全问题"))
-    heur = d.get("static_heuristics", {}).get("patterns_matched", {})
-    hits = d.get("static_heuristics", {}).get("hits", {})
-    crit_hits = sum(len(hits.get(p, [])) for p in ("private_key_material",) if p in hits)
-    high_hits = sum(heur.get(p, 0) for p in
-                    ("hardcoded_secret", "dangerous_eval", "py_os_system", "py_subprocess_shell",
-                     "py_pickle", "js_shell_exec", "go_exec_command", "cs_sql_concat"))
+    # 静态启发式：按 severity 聚合计数评分（M7 起 by_severity 覆盖全部语言模式）
+    heur_sev = d.get("static_heuristics", {}).get("by_severity", {})
+    if not heur_sev:  # 兼容旧产物结构
+        hits = d.get("static_heuristics", {}).get("hits", {})
+        heur_sev = {"critical": sum(len(hits.get(p, [])) for p in ("private_key_material",)),
+                    "high": sum(len(v) for k, v in hits.items() if k != "private_key_material")}
+    crit_hits = heur_sev.get("critical", 0)
+    high_hits = heur_sev.get("high", 0)
+    med_hits = heur_sev.get("medium", 0)
     if crit_hits:
-        score -= min(20, crit_hits * 10)
-        factors.append(_f("私钥材料入库", -min(20, crit_hits * 10), f"{crit_hits} 处命中（critical）"))
-    if high_hits:
-        impact = -min(15, high_hits * 1.5)
+        impact = -min(30, crit_hits * 15)
         score += impact
-        factors.append(_f("高危静态模式", impact, f"{high_hits} 处疑似高危模式命中（需人工复核）"))
+        factors.append(_f("critical 静态模式", impact, f"{crit_hits} 处命中（私钥入库/curl|bash 等）"))
+    if high_hits:
+        impact = -min(20, high_hits * 2)
+        score += impact
+        factors.append(_f("高危静态模式", impact, f"{high_hits} 处疑似高危命中（需人工复核）"))
+    if med_hits:
+        impact = -min(10, med_hits * 0.5)
+        score += impact
+        factors.append(_f("中危静态模式", impact, f"{med_hits} 处中危模式命中"))
+    # ruff bandit S 系列（Python）
+    bandit = d.get("python_bandit_rules") or {}
+    if isinstance(bandit, dict) and bandit.get("total"):
+        impact = -min(12, bandit["total"] * 0.5)
+        score += impact
+        factors.append(_f("bandit 规则命中", impact, f"ruff S 系列 {bandit['total']} 处（Python 安全规则）"))
     bp = d.get("best_practices", {})
     if bp.get("env_file_committed"):
         score -= 10

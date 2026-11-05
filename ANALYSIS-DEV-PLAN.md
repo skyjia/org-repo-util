@@ -117,6 +117,36 @@
   - 完成：2026-11-05。analysis/README（含 resume 与 Web 进程重启指引）、AGENTS.md 增补 audit/analyze 命令与架构注记、REQ 全部待决策项标记落定（schema v1 + prompt 体系）、DEV-PLAN 全程回填
   - 验收：新会话按 analysis/README.md 可独立跑通（setup.sh → doctor → start → ui → report）
 
+## 阶段 M7：多语言支持补足（2026-11-05 用户确认四项决策后启动）
+
+> 背景：repos/augmn 125 仓库中，除 Go(24)/C#(17)/TS(15)/Vue(13)/JS(4) 外还有 Python(22)/Shell(9)/Dart(6)/Java(1)/Ruby(1)/HTML(1)/文档空仓库(9)/fork(2)。
+> 已确认决策：① 引入 ruff（Python）+ shellcheck（Shell）本地 lint；② P0+P1+P2 全部补足；③ 无代码仓库（生产代码 <100 行）跳过 AI 出简版报告；④ fork 仓库 start 预检拒绝，完全不分析。
+> 成本红线：全部补足位于确定性采集层，**AI token 零增量**；空仓库守护使 9 个文档仓库 AI 成本归零。
+
+- [ ] **T701** P0：空仓库守护 + fork 预检 + Python 增强
+  - 内容：orchestrator 守护（production lines <100 → ai.*/scoring 全部 skipped，archive 照常出简版报告）；service fork 预检（gh api .fork 字段，API 不可达放行并标注）；docs 采集器 Python docstring 改用 ast 精确统计；overview 优先读 repos/<org>-summary.json 语言分布（省 API 调用）；报告主语言 fallback 到本地统计
+  - 验收：ai-env-setup（空）走守护路径零 AI 成本出简版报告；sqlfluff（fork）start 被拒；单测覆盖
+
+- [ ] **T702** P0：ruff lint 集成（Python 22 仓库）
+  - 内容：`python -m ruff check --output-format json --select E,F,W,S,B`；quality 采集器聚合（severity 映射：E9/F82x→high、F/B→medium、E/W→low）；S 系列（bandit 安全规则）同时供 security 采集器引用
+  - 验收：对 ops-mdm/da-etl 产出 lint 统计；ruff 不可用时 found:false 兜底
+
+- [ ] **T703** P1：Dart 支持包（6 仓库）
+  - 内容：pubspec.yaml 依赖解析 → OSV Pub 生态；`import 'package:x'` 包级依赖图；`_test.dart`/test/ 测试识别 + flutter_test/test 框架；`//` 注释 + 大写开头公共 API 统计；危险模式（Process.run/dart:mirrors）；复杂度/lint found:false 兜底（不引入 Flutter SDK）
+  - 验收：fe-dropdown-textfield-ui 采集完整（依赖/测试/注释/图）
+
+- [ ] **T704** P1：Shell 支持包（9 仓库）+ shellcheck
+  - 内容：shellcheck lint（分批调用、severity 映射 error→high/warning→medium/info→low/style→info）；危险模式（eval、curl|bash、rm -rf 未引号变量、chmod 777）；source/. 脚本调用图；bats/*_test.sh 测试识别
+  - 验收：ops-k8s-deploy 产出 shellcheck 统计与调用图
+
+- [ ] **T705** P2：Java + Ruby 支持包（各 1 仓库）
+  - 内容：Java——pom.xml/build.gradle 解析 → OSV Maven、junit/mockito 识别、jacoco 产物、公共 API/javadoc 统计；Ruby——Gemfile.lock 精确版本 → OSV RubyGems、rspec/minitest、eval/system/Marshal 模式
+  - 验收：fe-casamiel-admin-app（Java）与 ops-infrastructure（Ruby）采集完整
+
+- [ ] **T706** M7 集成验证与收尾
+  - 内容：6 个代表仓库端到端（Python: ops-mdm、Shell: ops-k8s-deploy、Dart: fe-dropdown-textfield-ui、Java: fe-casamiel-admin-app、Ruby: ops-infrastructure、空仓库: ai-env-setup）+ fork 拒绝验证（sqlfluff）；doctor 增补 ruff/shellcheck 检测；DESIGN 决策记录 D13-D15；README/AGENTS 更新
+  - 验收：代表仓库报告语言特有小节有数据或规范兜底标注；空仓库零 AI 成本；验证成本 ≤$12
+
 ---
 
 ## 风险与确认点（执行中遇到即与需求方确认）

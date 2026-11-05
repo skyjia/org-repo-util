@@ -24,6 +24,8 @@ LINE_COMMENT = {
     "Go": ("//",), "Python": ("#",), "C#": ("//",), "Shell": ("#",),
     "Java": ("//",), "Ruby": ("#",), "PHP": ("//", "#"), "Rust": ("//",),
     "CSS": ("/*",), "SCSS": ("//",), "SQL": ("--",),
+    "Dart": ("//",), "Kotlin": ("//",), "Swift": ("//",),
+    "C": ("//", "/*"), "C++": ("//", "/*"),
 }
 
 # 公共 API 声明模式（判断其上是否有文档注释）
@@ -33,12 +35,58 @@ PUBLIC_API_PATTERNS = {
     "Go": re.compile(r"^(func\s+(\([^)]*\)\s*)?[A-Z]\w*|type\s+[A-Z]\w*)"),
     "C#": re.compile(r"^\s*public\s+(static\s+|async\s+|sealed\s+|abstract\s+)*(class|interface|enum|record|[\w<>\[\]]+\s+\w+\s*\()"),
     "Python": re.compile(r"^(class\s+\w+|def\s+\w+)"),  # 模块级
+    # Dart：大写开头即公共（类/枚举/mixin/扩展/顶层函数）
+    "Dart": re.compile(r"^(abstract\s+|sealed\s+|base\s+|interface\s+|mixin\s+)*(class|enum|mixin|extension)\s+[A-Z]\w*|^[A-Z]\w*<?[\w<>,\s?]*>?\s+[a-z]\w*\s*\("),
+    # Java：public 声明
+    "Java": re.compile(r"^\s*public\s+(static\s+|final\s+|abstract\s+|synchronized\s+)*(class|interface|enum|record|@interface|[\w<>\[\],\s]+\s+\w+\s*\()"),
+    # Ruby：类与公共方法（Ruby 默认 public）
+    "Ruby": re.compile(r"^\s*(class\s+[A-Z]\w*|module\s+[A-Z]\w*|def\s+\w+)"),
 }
 
 
 def _lang_of(path: Path) -> str | None:
     from analysis.collectors.base import LANG_BY_EXT
     return LANG_BY_EXT.get(path.suffix.lower())
+
+
+def _python_docstring_stats(root: Path, max_files: int = 1500) -> dict | None:
+    """Python docstring 覆盖率精确统计（ast 解析，M7 T701；替代前缀启发式）"""
+    import ast
+    py_files = [p for p in iter_files(root)
+                if p.suffix == ".py" and not is_generated(p)
+                and not is_test_path(p.relative_to(root))]
+    if not py_files:
+        return None
+    stats = {"files": 0, "parse_errors": 0,
+             "modules": 0, "modules_with_doc": 0,
+             "classes": 0, "classes_with_doc": 0,
+             "functions": 0, "functions_with_doc": 0}
+    for path in py_files[:max_files]:
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
+        except (SyntaxError, ValueError, RecursionError):
+            stats["parse_errors"] += 1
+            continue
+        stats["files"] += 1
+        stats["modules"] += 1
+        if ast.get_docstring(tree):
+            stats["modules_with_doc"] += 1
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                stats["functions"] += 1
+                if ast.get_docstring(node):
+                    stats["functions_with_doc"] += 1
+            elif isinstance(node, ast.ClassDef):
+                stats["classes"] += 1
+                if ast.get_docstring(node):
+                    stats["classes_with_doc"] += 1
+    stats["function_docstring_coverage"] = (
+        round(stats["functions_with_doc"] / stats["functions"], 4) if stats["functions"] else None)
+    stats["class_docstring_coverage"] = (
+        round(stats["classes_with_doc"] / stats["classes"], 4) if stats["classes"] else None)
+    if stats["files"] < len(py_files):
+        stats["note"] = f"统计上限 {max_files} 文件（共 {len(py_files)} 个 .py）"
+    return stats
 
 
 @collector
@@ -147,6 +195,11 @@ class DocsCollector(Collector):
         out["comment_stats"] = comment_stats
         out["public_api_docs"] = api_stats or not_found(
             "公共 API 统计", "未识别到目标语言的公共 API 声明（可能语言不在启发式覆盖范围）")
+
+        # Python docstring 精确统计（ast，M7）
+        py_doc = _python_docstring_stats(root)
+        if py_doc:
+            out["python_docstrings"] = py_doc
 
         total_code = sum(s["code_lines"] for s in comment_stats.values())
         total_comment = sum(s["comment_lines"] for s in comment_stats.values())

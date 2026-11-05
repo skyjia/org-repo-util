@@ -182,11 +182,16 @@ def build_metadata(task: Task, outputs: dict[str, Optional[dict]]) -> dict:
                     "staleness_note": ref.get("staleness_note"),
                 })
 
+    # 仓库分类：空仓库守护触发时标注（M7，报告展示简版说明）
+    no_code = any((st.skip_reason or "").startswith("空仓库守护")
+                  for st in task.subtasks.values())
+
     return {
         "schema_version": config.SCHEMA_VERSION,
         "org": task.org,
         "repo": task.repo,
         "task_id": task.task_id,
+        "repository_class": "documentation_or_empty" if no_code else "code",
         "ref": task.ref,
         "commit_sha": task.commit_sha,
         "analyzed_at": task.finished_at or task.started_at,
