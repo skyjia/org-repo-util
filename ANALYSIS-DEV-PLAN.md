@@ -113,10 +113,9 @@
   - 质量护栏（可接受微损）：知识条目 30→21（设计区间内）、置信度中位 83.5→82（持平）、平均证据 2.2→1.9、gaps 10→10、矛盾 9→8、readiness 波动正常
   - 预估单仓库全程 AI 成本：$2.9-4.5 → **$2.0-2.2（−52%）**，AI 总时长 ~30min → ~17min
 
-- [ ] **T602** 文档与收尾
-  - 依赖：T601
-  - 内容：README 更新、AGENTS.md 增补 analyze 命令、REQ 待决策项 #1/#2 标记落定、DEV-PLAN 结果回填
-  - 验收：新会话按 README 可独立跑通一次分析
+- [x] **T602** 文档与收尾
+  - 完成：2026-11-05。analysis/README（含 resume 与 Web 进程重启指引）、AGENTS.md 增补 audit/analyze 命令与架构注记、REQ 全部待决策项标记落定（schema v1 + prompt 体系）、DEV-PLAN 全程回填
+  - 验收：新会话按 analysis/README.md 可独立跑通（setup.sh → doctor → start → ui → report）
 
 ---
 
