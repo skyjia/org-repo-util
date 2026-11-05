@@ -1,13 +1,20 @@
 """AI 引擎：Claude Code headless 封装（ANALYSIS-DESIGN.md §6.1）
 
-安全边界（设计决策 D3）：
-- --allowedTools 仅 Read/Grep/Glob（只读；git 上下文由 collect.git_context 预先注入）
-- 不开放 Bash/Write/Edit，AI 无法修改仓库或执行命令
+安全与成本边界：
+- --allowedTools 只读白名单（Read/Grep/Glob）；解读型子任务传空白名单（纯数据解读，
+  禁止代码探索，1-2 轮完成）
+- --strict-mcp-config + 空 mcpServers：屏蔽宿主终端环境（如 cmux）向 headless 会话
+  注入的 MCP 服务器与工具定义——实测系统上下文 16.7K → 5.5K tokens（省 67%）
+- 子进程环境剔除 CMUX_* 注入变量（settings/hooks/wrapper shim）
+- 失败取证：解析 stdout envelope（stop_reason/num_turns/result）+ 过滤无害警告的
+  stderr 尾部（第三方 provider 的 unrecognized_model 为噪音）
+- 观测：返回 num_turns / cost / usage，写入产物 _ai_meta（token 调优的数据基础）
 """
 
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -35,22 +42,40 @@ class AIEngine:
             return False, "claude CLI 未安装或不在 PATH"
         return True, exe
 
-    def run(self, prompt_text: str, repo_path: Path, timeout: int) -> dict:
-        """执行一次 AI 分析，返回解析后的 JSON dict"""
+    @staticmethod
+    def _clean_env() -> dict:
+        """剔除宿主终端（cmux 等）注入变量，防止 headless 会话被附加
+        settings/hooks/MCP wrapper（token 与启动耗时浪费）"""
+        env = os.environ.copy()
+        for k in list(env):
+            if k.startswith("CMUX_"):
+                env.pop(k)
+        return env
+
+    def run(self, prompt_text: str, repo_path: Path, timeout: int,
+            allowed_tools: Optional[str] = None) -> tuple[dict, dict]:
+        """执行一次 AI 分析。返回 (解析后的 JSON dict, 观测 meta)"""
         ok, info = self.available()
         if not ok:
             raise AIEngineError(info)
 
+        tools = self.allowed_tools if allowed_tools is None else allowed_tools
         cmd = [
             "claude", "-p",
             "--output-format", "json",
-            "--allowedTools", self.allowed_tools,
-            "--max-turns", str(self.max_turns),
+            "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
         ]
+        if tools:
+            cmd += ["--allowedTools", tools]
+        else:
+            # 空白名单：物理禁止一切工具调用（解读型任务，防探索发散）
+            cmd += ["--allowedTools", ""]
+        cmd += ["--max-turns", str(self.max_turns)]
+
         try:
             proc = subprocess.run(
                 cmd, input=prompt_text, capture_output=True, text=True,
-                timeout=timeout, cwd=str(repo_path))
+                timeout=timeout, cwd=str(repo_path), env=self._clean_env())
         except subprocess.TimeoutExpired:
             raise AIEngineError(f"claude 执行超时（>{timeout}s）")
 
@@ -68,7 +93,19 @@ class AIEngine:
             raise AIEngineError(
                 f"claude 返回空结果 (stop_reason={envelope.get('stop_reason')}, "
                 f"turns={envelope.get('num_turns')})")
-        return extract_json(text)
+
+        usage = envelope.get("usage") or {}
+        meta = {
+            "num_turns": envelope.get("num_turns"),
+            "stop_reason": envelope.get("stop_reason"),
+            "duration_api_ms": envelope.get("duration_api_ms"),
+            "total_cost_usd": envelope.get("total_cost_usd"),
+            "input_tokens": usage.get("input_tokens"),
+            "cache_creation_input_tokens": usage.get("cache_creation_input_tokens"),
+            "cache_read_input_tokens": usage.get("cache_read_input_tokens"),
+            "output_tokens": usage.get("output_tokens"),
+        }
+        return extract_json(text), meta
 
     @staticmethod
     def _failure_detail(proc: subprocess.CompletedProcess) -> str:

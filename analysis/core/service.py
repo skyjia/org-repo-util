@@ -71,6 +71,8 @@ def create_analysis_task(target: str, ref: str | None = None,
 
 
 def set_cancel(store: TaskStore, task_id: str) -> Task:
+    """取消任务。RUNNING 任务写独立 cancel.flag（不写 task.json，避免被
+    orchestrator 的状态保存竞态覆盖）；flag 在子任务边界与重试退避中生效。"""
     from analysis.core.models import TaskStatus
     task = store.find_task(task_id)
     if task.is_terminal:
@@ -81,9 +83,10 @@ def set_cancel(store: TaskStore, task_id: str) -> Task:
         store.save_task(task)
         store.append_event(task.task_id, "task_canceled", message="排队中取消")
     else:
-        task.cancel_requested = True
-        store.save_task(task)
-        store.append_event(task.task_id, "log", message="已请求取消（当前子任务结束后生效）")
+        store.request_cancel(task.task_id)
+        store.append_event(task.task_id, "log",
+                           message="已请求取消（当前子任务边界生效；AI 子任务执行中时"
+                                   "可 kill headless claude 进程立即中断，取消意图不会丢失）")
     return task
 
 
@@ -121,12 +124,14 @@ def set_retry(store: TaskStore, task_id: str, subtask: str | None = None,
         names = list(task.subtasks.keys())
         allow_any_state = False     # 默认：仅重置 failed/skipped
 
+    resettable = [SubtaskStatus.FAILED, SubtaskStatus.SKIPPED]
+    if task.status in (TaskStatus.CANCELED, TaskStatus.FAILED):
+        resettable.append(SubtaskStatus.RUNNING)   # 终态任务遗留的 running 孤儿一并重置
+
     reset = 0
     for name in names:
         st = task.subtasks[name]
-        if allow_any_state or st.status in (SubtaskStatus.FAILED, SubtaskStatus.SKIPPED):
-            if st.status == SubtaskStatus.COMPLETED and not allow_any_state:
-                continue
+        if allow_any_state or st.status in resettable:
             st.status = SubtaskStatus.QUEUED
             st.error = None
             st.skip_reason = None
@@ -135,12 +140,16 @@ def set_retry(store: TaskStore, task_id: str, subtask: str | None = None,
             st.finished_at = None
             st.duration_seconds = None
             reset += 1
-    if reset == 0:
-        raise ServiceError("没有可重试的子任务")
+
+    has_queued = any(st.status == SubtaskStatus.QUEUED for st in task.subtasks.values())
+    if reset == 0 and not has_queued:
+        raise ServiceError("没有可重试的子任务（全部已完成）")
+
     task.status = TaskStatus.QUEUED
     task.cancel_requested = False
     task.error = None
     task.finished_at = None
+    store.clear_cancel(task.task_id)
     store.save_task(task)
     store.append_event(task.task_id, "task_queued", message=f"retry：重置 {reset} 个子任务")
     daemon_mod.ensure_daemon(store)

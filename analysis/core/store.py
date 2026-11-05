@@ -166,6 +166,20 @@ class TaskStore:
                 return
             time.sleep(poll_interval)
 
+    # ---------- 取消标志（独立文件，修复 task.json 竞态覆盖） ----------
+    def cancel_flag_path(self, task_id: str) -> Path:
+        return self.task_dir(task_id) / "cancel.flag"
+
+    def request_cancel(self, task_id: str) -> None:
+        self.task_dir(task_id).mkdir(parents=True, exist_ok=True)
+        self.cancel_flag_path(task_id).write_text(now_iso())
+
+    def is_cancel_requested(self, task_id: str) -> bool:
+        return self.cancel_flag_path(task_id).exists()
+
+    def clear_cancel(self, task_id: str) -> None:
+        self.cancel_flag_path(task_id).unlink(missing_ok=True)
+
     # ---------- daemon 心跳与锁（中断恢复，REQ v6） ----------
     @property
     def heartbeat_file(self) -> Path:

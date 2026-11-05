@@ -227,11 +227,24 @@ def test_retry_reentry_skips_completed(store, repo):
 
 def test_cancel_before_run(store, repo):
     task = make_task(store, repo, mock=True)
-    task.cancel_requested = True
-    store.save_task(task)
+    store.request_cancel("t1")          # 新机制：独立 flag 文件
     task = Orchestrator(store).run_task(store.load_task("t1"))
     assert task.status == TaskStatus.CANCELED
     assert all(st.status == SubtaskStatus.QUEUED for st in task.subtasks.values())
+    assert not store.is_cancel_requested("t1")   # 终态时 flag 已清理
+
+
+def test_cancel_flag_survives_concurrent_save(store, repo):
+    """竞态回归：CLI 写入的取消意图不得被 orchestrator 的 task.json 保存覆盖"""
+    make_task(store, repo, mock=True)
+    task = store.load_task("t1")
+    task.status = TaskStatus.RUNNING     # 模拟 orchestrator 持有内存快照
+    store.request_cancel("t1")           # CLI 请求取消（flag 文件）
+    store.save_task(task)                # orchestrator 用旧快照保存 task.json
+    assert store.is_cancel_requested("t1")   # flag 独立于 task.json，未被覆盖
+    # run_task 第一个边界即感知取消
+    t2 = Orchestrator(store).run_task(store.load_task("t1"))
+    assert t2.status == TaskStatus.CANCELED
 
 
 def test_execute_with_timeout():

@@ -93,9 +93,9 @@ class Orchestrator:
             worktree_created = task.worktree_path is not None
 
             for name in topo_order():
-                task = self.store.load_task(task.task_id)  # 刷新 cancel_requested 等
-                if task.cancel_requested:
-                    raise TaskCanceled()
+                task = self.store.load_task(task.task_id)  # 刷新状态
+                if self.store.is_cancel_requested(task.task_id) or task.cancel_requested:
+                    raise TaskCanceled()   # flag 文件为准（task.json 字段仅兼容旧任务）
 
                 spec = SPECS_BY_NAME[name]
                 st = task.subtasks[name]
@@ -126,8 +126,17 @@ class Orchestrator:
             task.status = TaskStatus.CANCELED
             task.finished_at = now_iso()
             task.error = "用户取消"
+            # 被中断的 running 子任务重置（避免遗留孤儿 running 状态，便于后续 retry 续跑）
+            for st in task.subtasks.values():
+                if st.status == SubtaskStatus.RUNNING:
+                    st.status = SubtaskStatus.QUEUED
+                    st.attempts = 0
+                    st.error = None
+                    st.started_at = None
             self.store.save_task(task)
-            self.store.append_event(task.task_id, "task_canceled", message="任务已取消")
+            self.store.clear_cancel(task.task_id)
+            self.store.append_event(task.task_id, "task_canceled",
+                                    message="任务已取消（未完成子任务保持 queued，可 retry 续跑）")
         except Exception as e:  # 任务级异常（工作区准备失败等）
             task = self.store.load_task(task.task_id)
             task.status = TaskStatus.FAILED
@@ -200,12 +209,12 @@ class Orchestrator:
                                             subtask=spec.name, message=st.error)
 
     def _interruptible_sleep(self, task_id: str, seconds: float) -> bool:
-        """退避等待（每秒检查取消请求）；返回 True 表示收到取消"""
+        """退避等待（每秒检查取消标志文件）；返回 True 表示收到取消"""
         deadline = time.monotonic() + seconds
         while time.monotonic() < deadline:
             time.sleep(min(1.0, max(0.0, deadline - time.monotonic())))
             try:
-                if self.store.load_task(task_id).cancel_requested:
+                if self.store.is_cancel_requested(task_id):
                     return True
             except Exception:
                 pass
