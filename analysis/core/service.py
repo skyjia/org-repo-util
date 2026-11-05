@@ -87,25 +87,56 @@ def set_cancel(store: TaskStore, task_id: str) -> Task:
     return task
 
 
-def set_retry(store: TaskStore, task_id: str, subtask: str | None = None) -> Task:
+def downstream_of(name: str) -> set[str]:
+    """DAG 传递下游（含直接/间接依赖 name 的全部子任务）"""
+    from analysis.core.registry import SUBTASK_SPECS
+    children: dict[str, list[str]] = {s.name: [] for s in SUBTASK_SPECS}
+    for s in SUBTASK_SPECS:
+        for dep in s.deps:
+            children[dep].append(s.name)
+    seen, stack = set(), [name]
+    while stack:
+        n = stack.pop()
+        for c in children.get(n, []):
+            if c not in seen:
+                seen.add(c)
+                stack.append(c)
+    return seen
+
+
+def set_retry(store: TaskStore, task_id: str, subtask: str | None = None,
+              cascade: bool = True) -> Task:
+    """重试。指定 --subtask 时默认级联重置其全部下游（上游数据变化后下游结论必须重算）"""
     from analysis.core.models import SubtaskStatus, TaskStatus
     task = store.find_task(task_id)
     if task.status == TaskStatus.RUNNING:
         raise ServiceError("任务执行中，不能 retry（可先 cancel）")
-    names = [subtask] if subtask else list(task.subtasks.keys())
     if subtask and subtask not in task.subtasks:
         raise ServiceError(f"无此子任务: {subtask}")
+
+    if subtask:
+        names = [subtask] + (sorted(downstream_of(subtask)) if cascade else [])
+        allow_any_state = True      # 指定子任务：completed 也重置（数据可能已过期）
+    else:
+        names = list(task.subtasks.keys())
+        allow_any_state = False     # 默认：仅重置 failed/skipped
+
     reset = 0
     for name in names:
         st = task.subtasks[name]
-        if st.status in (SubtaskStatus.FAILED, SubtaskStatus.SKIPPED):
+        if allow_any_state or st.status in (SubtaskStatus.FAILED, SubtaskStatus.SKIPPED):
+            if st.status == SubtaskStatus.COMPLETED and not allow_any_state:
+                continue
             st.status = SubtaskStatus.QUEUED
             st.error = None
             st.skip_reason = None
             st.attempts = 0
+            st.started_at = None
+            st.finished_at = None
+            st.duration_seconds = None
             reset += 1
     if reset == 0:
-        raise ServiceError("没有可重试的 failed/skipped 子任务")
+        raise ServiceError("没有可重试的子任务")
     task.status = TaskStatus.QUEUED
     task.cancel_requested = False
     task.error = None

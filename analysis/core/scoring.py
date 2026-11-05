@@ -135,19 +135,16 @@ def _score_security(d: Optional[dict]) -> dict:
     factors = []
     osv = d.get("dependency_vulnerabilities", {})
     if osv.get("found"):
-        crit = high = other = 0
-        for v in osv.get("vulnerable", []):
-            sev = str(v.get("severity") or "").upper()
-            if "CRIT" in sev:
-                crit += 1
-            elif "HIGH" in sev:
-                high += 1
-            else:
-                other += 1
-        impact = -(min(40, crit * 20) + min(30, high * 10) + min(12, other * 3))
+        affected = osv.get("affected_package_count")
+        if affected is None:  # 兼容旧结构
+            affected = len({v.get("package") for v in osv.get("vulnerable", [])})
+        entries = osv.get("vulnerability_entries", 0)
+        # querybatch 无 severity → 按受影响包数计分（每包 -2，封顶 -20）
+        impact = -min(20, affected * 2)
         score += impact
         factors.append(_f("依赖已知漏洞", impact,
-                          f"OSV 匹配：critical={crit} high={high} 其他={other}（共查询 {osv.get('queried')} 个精确版本依赖）"))
+                          f"OSV 匹配：{affected} 个依赖包受影响（共 {entries} 条漏洞记录，"
+                          f"查询 {osv.get('queried')} 个精确版本）；severity 未获取（轻量查询）"))
     elif osv.get("degraded"):
         factors.append(_f("OSV 降级", 0, osv.get("reason", "漏洞库不可达，本项不计扣分")))
     audit_sec = d.get("audit_security", {})

@@ -256,8 +256,11 @@ ul.tight{margin:6px 0;padding-left:22px}ul.tight li{margin:3px 0}
 <h3>依赖已知漏洞（OSV 查询式匹配，未执行代码）</h3>
 {% set osv = sec.dependency_vulnerabilities or {} %}
 {% if osv.get('found') %}
-{% if osv.vulnerable %}<table><tr><th>包</th><th>版本</th><th>漏洞</th><th>链接</th></tr>
-{% for v in osv.vulnerable %}<tr><td>{{ v.package }}</td><td>{{ v.version }}</td><td>{{ sev((v.severity or 'unknown')|lower) }} {{ v.id }}</td><td><a href="{{ v.url }}">{{ v.url }}</a></td></tr>{% endfor %}</table>
+{% if osv.affected_packages %}
+<p><b>{{ osv.affected_package_count }}</b> 个依赖包受影响（共 {{ osv.vulnerability_entries }} 条漏洞记录，查询 {{ osv.queried }} 个精确版本依赖）</p>
+<table><tr><th>包</th><th>版本</th><th>漏洞数</th><th>漏洞 ID（前 5）</th></tr>
+{% for p in osv.affected_packages %}<tr><td>{{ p.package }}</td><td>{{ p.version }}</td><td class="num">{{ (p.vuln_ids or [])|length }}</td><td class="evidence">{{ (p.vuln_ids or [])[:5]|join(', ') }}{% if (p.vuln_ids or [])|length > 5 %} …{% endif %} · <a href="{{ (p.urls or ['#'])[0] }}">OSV</a></td></tr>{% endfor %}</table>
+{% if osv.severity_note %}<div class="notice">{{ osv.severity_note }}</div>{% endif %}
 {% else %}<div class="notice">✅ 已查询 {{ osv.queried }} 个精确版本依赖，未匹配到已知漏洞</div>{% endif %}
 {% else %}<div class="missing">⚠️ {{ osv.reason or osv.suggestion or osv.what or '漏洞匹配不可用' }}</div>{% endif %}
 <h3>audit 安全扫描（复用产物）</h3>

@@ -175,12 +175,14 @@ def cancel(ctx, task_id: str):
 
 @cli.command()
 @click.argument("task_id")
-@click.option("--subtask", "-s", help="仅重试指定子任务（默认重试全部 failed/skipped）")
+@click.option("--subtask", "-s", help="重试指定子任务（默认级联重置其全部下游；未指定时重试全部 failed/skipped）")
+@click.option("--no-cascade", is_flag=True, help="配合 --subtask：不级联重置下游")
 @click.pass_context
-def retry(ctx, task_id: str, subtask: Optional[str]):
-    """重试失败/跳过的子任务，任务重新入队（已完成子任务不重复执行）"""
+def retry(ctx, task_id: str, subtask: Optional[str], no_cascade: bool):
+    """重试子任务并重新入队（未指定的已完成子任务不重复执行）"""
     try:
-        task = service.set_retry(ctx.obj["store"], task_id, subtask)
+        task = service.set_retry(ctx.obj["store"], task_id, subtask,
+                                 cascade=not no_cascade)
     except (TaskNotFoundError, service.ServiceError) as e:
         raise click.ClickException(str(e))
     click.echo(f"♻️ 已重新入队: {task.task_id}")

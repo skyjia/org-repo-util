@@ -62,11 +62,15 @@ def test_grade_thresholds():
     assert result["dimensions"]["architecture"]["source"] == "ai"
 
 
-def test_security_critical_vuln_penalized():
+def test_security_affected_packages_penalized():
     base = {
         "collect.security": {
-            "dependency_vulnerabilities": {"found": True, "queried": 5, "vulnerable": [
-                {"id": "GHSA-x", "package": "p", "version": "1.0", "severity": "CRITICAL"}]},
+            "dependency_vulnerabilities": {
+                "found": True, "queried": 20,
+                "affected_package_count": 12, "vulnerability_entries": 30,
+                "affected_packages": [{"package": "p", "version": "1.0",
+                                       "vuln_ids": ["GHSA-x"], "urls": []}],
+            },
             "audit_security": {"found": False},
             "static_heuristics": {"patterns_matched": {"hardcoded_secret": 3},
                                   "hits": {"hardcoded_secret": [
@@ -77,9 +81,28 @@ def test_security_critical_vuln_penalized():
     }
     result = compute_scores(base)
     sec = result["dimensions"]["security"]
+    # -20（12 包×2 封顶 20）-4.5（3 高危模式×1.5）-10（.env 入库）→ <70
     assert sec["score"] < 70
     assert any("依赖已知漏洞" in f["factor"] for f in sec["factors"])
     assert any(".env" in f["factor"] for f in sec["factors"])
+
+
+def test_security_legacy_vuln_structure_compat():
+    """兼容旧结构（无 affected_package_count 时按 vulnerable 列表去重包数）"""
+    base = {
+        "collect.security": {
+            "dependency_vulnerabilities": {"found": True, "queried": 5, "vulnerable": [
+                {"id": "GHSA-x", "package": "p1", "version": "1.0", "severity": None},
+                {"id": "GHSA-y", "package": "p1", "version": "1.0", "severity": None},
+                {"id": "GHSA-z", "package": "p2", "version": "2.0", "severity": None}]},
+            "audit_security": {"found": False},
+            "static_heuristics": {"patterns_matched": {}, "hits": {}},
+            "best_practices": {"lockfile_present": True, "env_file_committed": False,
+                               "no_private_key_files": True},
+        },
+    }
+    sec = compute_scores(base)["dimensions"]["security"]
+    assert sec["score"] == 96.0   # 100 - 2包×2
 
 
 def test_missing_dimension_normalized():

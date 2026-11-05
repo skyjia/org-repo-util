@@ -83,15 +83,34 @@ def _osv_query(deps: dict[str, dict]) -> dict:
                 "reason": f"OSV API 不可达: {type(e).__name__}: {e}",
                 "suggestion": "联网恢复后重跑 collect.security 子任务（analyze retry）"}
 
-    vulns = []
+    # querybatch 为轻量响应（仅 id/modified，无 severity）；按包聚合避免条目数误导
+    affected: dict[str, dict] = {}
+    total_entries = 0
     for m, res in zip(meta, results):
         for v in (res or {}).get("vulns", []) or []:
-            vulns.append({"package": m["name"], "version": m["version"],
-                          "ecosystem": m["ecosystem"], "id": v.get("id"),
-                          "severity": (v.get("database_specific") or {}).get("severity"),
-                          "url": f"https://osv.dev/vulnerability/{v.get('id')}"})
-    return {"found": True, "queried": len(queries), "vulnerable": vulns[:100],
-            "vulnerable_count": len(vulns)}
+            total_entries += 1
+            key = f"{m['name']}@{m['version']}"
+            pkg = affected.setdefault(key, {
+                "package": m["name"], "version": m["version"],
+                "ecosystem": m["ecosystem"], "vuln_ids": [], "urls": []})
+            pkg["vuln_ids"].append(v.get("id"))
+            pkg["urls"].append(f"https://osv.dev/vulnerability/{v.get('id')}")
+    return {
+        "found": True,
+        "queried": len(queries),
+        "affected_package_count": len(affected),
+        "vulnerability_entries": total_entries,
+        "affected_packages": sorted(affected.values(),
+                                    key=lambda p: -len(p["vuln_ids"]))[:50],
+        "severity_note": "querybatch 轻量响应不含 severity 字段；精确严重度需逐条查询 "
+                         "osv.dev/vulnerability/{id} 详情（后续可增强）",
+        # 兼容旧字段（截断展示用）
+        "vulnerable": [
+            {"package": p["package"], "version": p["version"], "id": vid,
+             "severity": None, "url": f"https://osv.dev/vulnerability/{vid}"}
+            for p in affected.values() for vid in p["vuln_ids"][:3]
+        ][:100],
+    }
 
 
 @collector
