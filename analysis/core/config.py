@@ -39,6 +39,15 @@ RUFF_TIMEOUT = 240
 SHELLCHECK_TIMEOUT = 240
 SHELLCHECK_MAX_FILES = 300      # shell 文件送检上限
 FORK_POLICY_REJECT = True       # fork 仓库 start 预检拒绝（用户决策：完全不分析）
+ARCHIVED_POLICY_REJECT = True   # archived 仓库 start 预检拒绝（用户决策 2026-11-05 补充：完全不分析）
+# --no-ai：跳过全部 AI 子任务但保留采集/评分/归档（零 AI 成本的采集层验证与日常批量扫描）
+SKIP_TAG_NO_AI = "--no-ai"      # skip_reason 前缀，编排器据此区分「计划跳过」与「失败跳过」
+SKIP_TAG_BUDGET = "AI 预算护栏"  # 同上：成本触顶的计划跳过，不阻塞 scoring（决策 D4）
+NO_AI_SKIP_REASON = f"{SKIP_TAG_NO_AI}：按用户指定跳过 AI 子任务（零 AI 成本）"
+
+# 单任务 AI 预算护栏：累计成本达到上限后，剩余 AI 子任务计划跳过（防止误操作持续烧钱）
+# （--ai-stub 的识别走 task.ai_stub / _ai_meta.stub，桩产物 cost 恒为 0，不会触顶）
+MAX_TASK_AI_COST_USD = 5.0      # 需求方 2026-11-05 指定
 
 # ---------- Web ----------
 WEB_HOST = "127.0.0.1"          # 仅本机（REQ §4.3）

@@ -274,11 +274,40 @@ def _validate(name: str, data: dict) -> None:
     jsonschema.validate(data, schema)
 
 
+def _stub_output(template: str) -> dict:
+    """--ai-stub 桩产物（schema-valid，零 AI 成本；开发/回归用，见 DESIGN D17）"""
+    path = AI_DIR / "stub_outputs" / f"{template}.json"
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 def _run_ai(ctx, template: str, allowed_tools: str | None = None, **variables) -> dict:
+    stub = bool(getattr(ctx.task, "ai_stub", False))
     mode = "探索型（只读白名单）" if allowed_tools is None else "解读型（无工具，单轮）"
-    ctx.log(f"AI 子任务启动: {template}（claude headless，{mode}）")
+    ctx.log(f"AI 子任务启动: {template}"
+            + ("（桩执行 --ai-stub，不调用 claude，cost=$0）" if stub
+               else f"（claude headless，{mode}）"))
     prompt = _jinja.get_template(f"{template}.md.j2").render(
         org=ctx.org, repo=ctx.repo, commit_sha=ctx.commit_sha, **variables)
+    if stub:
+        # prompt 仍完整渲染（模板/变量错误照常暴露），但不调用模型；桩产物同样过 schema 校验
+        data = _stub_output(template)
+        _validate(template, data)
+        ctx.log(f"AI 子任务完成: {template}（桩执行，turns=0, cost=$0, "
+                f"prompt 长度={len(prompt)} 字符）")
+        data["_ai_meta"] = {
+            "engine": "stub(--ai-stub)",
+            "prompt_version": _prompt_version(template),
+            "generated_at": now_iso(),
+            "nondeterministic": False,
+            "stub": True,
+            "prompt_chars": len(prompt),
+            "note": "桩数据（--ai-stub）：非模型输出，不可作为分析结论（DESIGN D17）",
+            "num_turns": 0, "stop_reason": "stub", "duration_api_ms": 0,
+            "total_cost_usd": 0.0, "input_tokens": 0,
+            "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0,
+            "output_tokens": 0,
+        }
+        return data
     data, meta = ENGINE.run(
         prompt, ctx.repo_path,
         timeout=config.AI_SUBTASK_TIMEOUT - _ENGINE_GRACE,

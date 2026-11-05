@@ -41,40 +41,62 @@ def _git(repo: Path, *args: str) -> str:
     return proc.stdout.strip()
 
 
-def check_fork(org: str, repo: str) -> tuple[bool | None, str | None]:
-    """fork 预检（M7 用户决策：fork 仓库完全不分析）。
+def repo_flags(org: str, repo: str) -> tuple[bool | None, bool | None, str | None]:
+    """GitHub 仓库属性预检（一次 gh api 同时取 fork / archived）。
 
-    返回 (is_fork, note)；gh api 不可达时 (None, 原因)——放行并在任务事件中标注。
+    返回 (is_fork, is_archived, note)；判定不可得时对应位为 None + 原因——
+    放行并在任务事件中标注（网络不可达 / 非 GitHub 仓库，均不作拒绝依据）。
     """
     try:
         proc = subprocess.run(
-            ["gh", "api", f"repos/{org}/{repo}", "--jq", ".fork"],
+            ["gh", "api", f"repos/{org}/{repo}", "--jq",
+             '[.fork, .archived] | map(tostring) | join(" ")'],
             capture_output=True, text=True, timeout=30)
-        if proc.returncode == 0:
-            return proc.stdout.strip() == "true", None
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-        pass
-    return None, "gh api 不可达：fork 预检跳过（如为 fork 仓库，报告中请人工甄别）"
+        proc = None
+    if proc is not None and proc.returncode == 0:
+        fields = proc.stdout.strip().split()
+        if len(fields) == 2:
+            return fields[0] == "true", fields[1] == "true", None
+    if proc is not None and ("404" in proc.stderr or "Not Found" in proc.stderr):
+        return None, None, (f"GitHub 无 {org}/{repo} 记录（本地/非托管仓库）："
+                            "fork 与 archived 预检跳过，报告中请人工甄别")
+    return None, None, "gh api 不可达：fork 与 archived 预检跳过（如属该类仓库，报告中请人工甄别）"
+
+
+def check_fork(org: str, repo: str) -> tuple[bool | None, str | None]:
+    """fork 预检（M7 用户决策：fork 仓库完全不分析）；repo_flags 的兼容视图。"""
+    is_fork, _, note = repo_flags(org, repo)
+    return is_fork, note
 
 
 def create_analysis_task(target: str, ref: str | None = None,
                          mock: bool = False, store: TaskStore | None = None,
-                         start_daemon: bool = True) -> Task:
-    """创建分析任务并确保 daemon 运行；立即返回（REQ 第 7 章即时响应）"""
+                         start_daemon: bool = True, no_ai: bool = False,
+                         ai_stub: bool = False) -> Task:
+    """创建分析任务并确保 daemon 运行；立即返回（REQ 第 7 章即时响应）
+
+    no_ai：AI 子任务全部跳过；ai_stub：AI 子任务走 schema-valid 桩（$0，报告不归档）。
+    两者同时为真时 no_ai 优先（编排器先判 no_ai）。
+    """
     store = store or TaskStore()
     org, repo = resolve_target(target)
     repo_path = config.REPOS_DIR / org / repo
     if not repo_path.exists():
         raise ServiceError(f"仓库未克隆: {repo_path}（先执行 fish src/main.fish clone {org}）")
 
-    # fork 预检（用户决策 2026-11-05：fork 仓库完全不分析）
-    fork_note = None
-    if config.FORK_POLICY_REJECT and not mock:
-        is_fork, fork_note = check_fork(org, repo)
-        if is_fork:
+    # 仓库属性预检（用户决策 2026-11-05：fork 与 archived 仓库完全不分析）
+    policy_note = None
+    if (config.FORK_POLICY_REJECT or config.ARCHIVED_POLICY_REJECT) and not mock:
+        is_fork, is_archived, policy_note = repo_flags(org, repo)
+        if config.FORK_POLICY_REJECT and is_fork:
             raise ServiceError(
                 f"fork 仓库按策略不分析（需求方决策 2026-11-05）: {org}/{repo}；"
                 f"如需分析请调整 config.FORK_POLICY_REJECT")
+        if config.ARCHIVED_POLICY_REJECT and is_archived:
+            raise ServiceError(
+                f"archived（已归档）仓库按策略不分析（需求方决策 2026-11-05）: {org}/{repo}；"
+                f"如需分析请调整 config.ARCHIVED_POLICY_REJECT")
 
     if ref:
         _git(repo_path, "rev-parse", "--verify", f"{ref}^{{commit}}")  # 校验 ref 有效
@@ -86,11 +108,20 @@ def create_analysis_task(target: str, ref: str | None = None,
 
     task = Task(task_id=task_id, org=org, repo=repo,
                 repo_path=f"repos/{org}/{repo}", ref=ref,
-                commit_sha=commit_sha, mock=mock)
+                commit_sha=commit_sha, mock=mock, no_ai=no_ai, ai_stub=ai_stub)
     task.subtasks = {s.name: SubtaskState(name=s.name, type=s.type) for s in SUBTASK_SPECS}
     store.create_task(task)
-    if fork_note:
-        store.append_event(task.task_id, "log", message=fork_note)
+    if policy_note:
+        store.append_event(task.task_id, "log", message=policy_note)
+    if no_ai:
+        store.append_event(task.task_id, "log",
+                           message=f"{config.NO_AI_SKIP_REASON}：采集/评分/归档链路照常，"
+                                   f"AI 维度按缺失权重归一化（决策 D4）")
+    if ai_stub and not no_ai:
+        store.append_event(task.task_id, "log",
+                           message="--ai-stub：4 个 AI 子任务返回 schema-valid 桩产物"
+                                   "（$0 成本，覆盖 prompt 渲染/校验/评分/归档链路）；"
+                                   "报告只落 state/tasks/，不写入 reports/（决策 D17）")
 
     if start_daemon:
         daemon_mod.ensure_daemon(store)

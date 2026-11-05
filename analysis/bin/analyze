@@ -58,12 +58,17 @@ def cli(ctx, verbose: bool):
 @click.argument("target")
 @click.option("--ref", "-r", help="指定 branch/tag/commit（默认当前 HEAD）")
 @click.option("--mock", is_flag=True, help="联调模式：以模拟执行代替未实现的 handler")
+@click.option("--no-ai", is_flag=True,
+              help="只跑确定性采集 + 评分 + 归档，跳过全部 AI 子任务（零 AI 成本）")
+@click.option("--ai-stub", is_flag=True,
+              help="AI 子任务返回 schema-valid 桩（$0 成本跑通全流程；报告不写入 reports/）")
 @click.pass_context
-def start(ctx, target: str, ref: Optional[str], mock: bool):
+def start(ctx, target: str, ref: Optional[str], mock: bool, no_ai: bool, ai_stub: bool):
     """发起分析：<org>/<repo>，立即返回（后台异步执行）"""
     store: TaskStore = ctx.obj["store"]
     try:
-        task = service.create_analysis_task(target, ref, mock, store=store)
+        task = service.create_analysis_task(target, ref, mock, store=store, no_ai=no_ai,
+                                            ai_stub=ai_stub)
         daemon_mod.ensure_daemon(store, ctx.obj["verbose"])
     except service.ServiceError as e:
         raise click.ClickException(str(e))
@@ -75,6 +80,11 @@ def start(ctx, target: str, ref: Optional[str], mock: bool):
                + (f"（ref={ref}）" if ref else ""))
     if mock:
         click.echo("   ⚠️ mock 模式：子任务为模拟执行")
+    if no_ai:
+        click.echo("   ℹ️ --no-ai：跳过全部 AI 子任务（采集/评分/归档照常，零 AI 成本；"
+                   "AI 维度按缺失权重归一化）")
+    if ai_stub and not no_ai:
+        click.echo("   ⚠️ --ai-stub：AI 子任务返回桩产物（$0），报告不写入 reports/ 归档")
     click.echo(f"\n   查看进度: analyze status {task.task_id}")
     click.echo(f"   可视化:   analyze ui")
 
@@ -126,8 +136,14 @@ def status(ctx, task_id: Optional[str]):
             str(st.attempts), note[:60])
     console.print(table)
 
+    cost = store.ai_cost_usd(task)
+    cap = config.MAX_TASK_AI_COST_USD
+    console.print(f"  💰 AI 成本: ${cost:.2f} / 护栏上限 ${cap:.2f}"
+                  + ("  ⚠️ 已触顶（剩余 AI 子任务计划跳过）" if cost >= cap else ""))
+
     if task.report.get("html"):
-        console.print(f"  📄 报告: {task.report['html']}")
+        tag = "（--ai-stub 桩报告，未归档）" if task.ai_stub else ""
+        console.print(f"  📄 报告{tag}: {task.report['html']}")
 
 
 @cli.command()
@@ -148,16 +164,20 @@ def history(ctx, limit: int):
     console = Console()
     table = Table(title=f"分析任务（最近 {len(tasks)} 条）", box=box.ROUNDED)
     for col, style in (("任务 ID", "cyan"), ("仓库", "magenta"), ("状态", ""),
-                       ("进度", "green"), ("创建时间", "dim"), ("耗时", "dim")):
+                       ("进度", "green"), ("创建时间", "dim"), ("耗时", "dim"),
+                       ("AI 成本", "yellow")):
         table.add_column(col, style=style or None)
     for t in reversed(tasks):
         p = t.progress
+        mode = "桩" if t.ai_stub else ("无AI" if t.no_ai else ("mock" if t.mock else ""))
         table.add_row(
             t.task_id, f"{t.org}/{t.repo}",
-            f"{STATUS_ICONS.get(t.status.value, '')} {t.status.value}",
+            f"{STATUS_ICONS.get(t.status.value, '')} {t.status.value}"
+            + (f"（{mode}）" if mode else ""),      # 全角括号：避免 rich 把方括号当 markup
             f"{p['completed']}/{p['total']}",
             t.created_at.replace("T", " "),
-            f"{t.duration_seconds}s" if t.duration_seconds else "-")
+            f"{t.duration_seconds}s" if t.duration_seconds else "-",
+            f"${store.ai_cost_usd(t):.2f}")
     console.print(table)
 
 

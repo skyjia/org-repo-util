@@ -19,6 +19,8 @@ class CreateTaskBody(BaseModel):
     target: str                 # <org>/<repo> 或 <repo>
     ref: str | None = None
     mock: bool = False
+    no_ai: bool = False         # M7：跳过全部 AI 子任务（零 AI 成本，与 CLI --no-ai 同义）
+    ai_stub: bool = False       # M7：AI 子任务走 schema-valid 桩（$0，报告不归档，DESIGN D17）
 
 
 class RetryBody(BaseModel):
@@ -41,7 +43,8 @@ def list_tasks():
 @router.post("/api/tasks")
 def create_task(body: CreateTaskBody):
     try:
-        task = service.create_analysis_task(body.target, body.ref, body.mock, store=_store)
+        task = service.create_analysis_task(body.target, body.ref, body.mock, store=_store,
+                                            no_ai=body.no_ai, ai_stub=body.ai_stub)
     except service.ServiceError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except RuntimeError as e:

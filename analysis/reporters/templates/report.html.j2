@@ -109,6 +109,12 @@ ul.tight{margin:6px 0;padding-left:22px}ul.tight li{margin:3px 0}
 {% if meta.repository_class == 'documentation_or_empty' %}
 <div class="missing">📄 <b>文档类 / 空仓库</b>：生产代码不足 {{ 100 }} 行，已按守护策略跳过 AI 分析（零 AI 成本）。本报告为简版：含采集数据与仓库性质说明，无架构 / 业务知识 / 结论章节。</div>
 {% endif %}
+{% if meta.ai_stub %}
+<div class="missing">🧪 <b>桩执行（--ai-stub）</b>：4 个 AI 章节为 schema-valid 占位数据，<b>非模型输出，不构成任何分析结论</b>。本报告仅用于回归 prompt 渲染/校验/评分/归档链路，且不写入 reports/ 归档目录。</div>
+{% endif %}
+{% if meta.analysis_scope == 'deterministic_only' %}
+<div class="notice">⏸️ <b>仅确定性分析</b>：本次任务以 --no-ai 发起，4 个 AI 子任务按计划跳过（零 AI 成本）。架构 / 业务知识 / 结论 / 执行摘要章节为空属预期，评分按剩余 7 个维度权重归一化（决策 D4）；需要完整报告请去掉 --no-ai 重新 start。</div>
+{% endif %}
 <details><summary>数据来源与局限声明（纯静态分析）</summary>
 <ul class="tight">
 {% for l in (meta.limitations or []) %}<li>{{ l }}</li>{% endfor %}

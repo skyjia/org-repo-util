@@ -32,6 +32,7 @@ th,td{border-bottom:1px solid var(--line);padding:7px 9px;text-align:left}
 th{color:var(--muted);font-weight:600;font-size:12px}
 tr.clickable{cursor:pointer}tr.clickable:hover td{background:#f9fafb}
 .badge{display:inline-block;padding:1px 10px;border-radius:999px;font-size:12px;font-weight:600;color:#fff}
+.mode-tag{margin-left:6px;padding:1px 7px;border:1px solid var(--line);border-radius:999px;font-size:11px;color:var(--muted);background:#fff;cursor:help}
 .st-queued{background:#9ca3af}.st-running{background:var(--run);animation:pulse 1.2s infinite}
 .st-completed{background:var(--ok)}.st-failed{background:var(--bad)}
 .st-skipped{background:var(--warn)}.st-canceled{background:#6b7280}

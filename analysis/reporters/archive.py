@@ -39,7 +39,12 @@ def archive_handler(ctx) -> dict:
     report = build_report(task, outputs)
 
     ts = datetime.fromisoformat(task.created_at).strftime("%Y%m%d_%H%M%S")
-    out_dir = archive_dir(task.org, task.repo)
+    # 桩报告不归档（DESIGN D17）：只落任务目录，reports/ 与 latest 指针不受影响，
+    # 避免 schema-valid 桩产物被当作真实分析结论消费
+    if task.ai_stub:
+        out_dir = ctx.store.task_dir(task.task_id) / "report"
+    else:
+        out_dir = archive_dir(task.org, task.repo)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     json_path = out_dir / f"{ts}.json"
@@ -50,16 +55,19 @@ def archive_handler(ctx) -> dict:
     from analysis.reporters.html_report import render_html
     warnings = render_html(report, html_path)
 
-    _update_latest(out_dir, ts)
+    if not task.ai_stub:
+        _update_latest(out_dir, ts)
 
     # 回填 task.report：直接改 ctx.task（与 orchestrator 持有同一对象），
     # 由 orchestrator 在子任务完成后统一落盘——避免自行 save 被后续保存覆盖
     task.report = {"html": str(html_path), "json": str(json_path)}
-    ctx.log(f"归档完成: {html_path}")
+    ctx.log(("--ai-stub 桩报告（不归档，仅供链路核对）: " if task.ai_stub else "归档完成: ")
+            + str(html_path))
 
     return {
         "html": str(html_path),
         "json": str(json_path),
         "html_size_bytes": html_path.stat().st_size,
+        "archived": not task.ai_stub,
         "warnings": warnings,
     }

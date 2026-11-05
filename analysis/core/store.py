@@ -167,6 +167,30 @@ class TaskStore:
             time.sleep(poll_interval)
 
     # ---------- 取消标志（独立文件，修复 task.json 竞态覆盖） ----------
+    def ai_cost_usd(self, task: Task) -> float:
+        """任务累计 AI 成本：读已完成 AI 子任务产物的 _ai_meta.total_cost_usd
+
+        --ai-stub 桩产物成本恒为 0，因此不会触顶预算护栏。
+        """
+        from analysis.core.models import SubtaskStatus
+        from analysis.core.registry import SPECS_BY_NAME
+
+        total = 0.0
+        tdir = self.task_dir(task.task_id)
+        for name, st in (task.subtasks or {}).items():
+            spec = SPECS_BY_NAME.get(name)
+            if not spec or spec.type != "ai" or not spec.output_file:
+                continue
+            if st.status != SubtaskStatus.COMPLETED:
+                continue
+            try:
+                data = json.loads((tdir / spec.output_file).read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            meta = (data or {}).get("_ai_meta") or {}
+            total += float(meta.get("total_cost_usd") or 0)
+        return round(total, 4)
+
     def cancel_flag_path(self, task_id: str) -> Path:
         return self.task_dir(task_id) / "cancel.flag"
 

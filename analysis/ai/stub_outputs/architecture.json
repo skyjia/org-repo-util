@@ -1,0 +1,28 @@
+{
+  "overview": "（桩数据，非真实结论）本产物由 --ai-stub 生成，用于零成本回归 prompt 组装、schema 校验、评分注入与归档渲染链路。",
+  "entry_points": ["(stub) main()"],
+  "layers": ["(stub) interface", "(stub) service"],
+  "components": [
+    {
+      "name": "(stub) StubComponent",
+      "responsibility": "桩组件：仅用于验证 components 的 schema 与报告渲染",
+      "evidence": ["(stub) analysis/ai/stub_outputs/architecture.json"]
+    }
+  ],
+  "patterns": ["(stub) layered"],
+  "dependency_issues": [],
+  "architecture_diagram_mermaid": "flowchart TD\n  A[(stub) Client] --> B[(stub) Service]\n  B --> C[(stub) Store]",
+  "doc_assessment": {"note": "(stub)"},
+  "issues": [
+    {
+      "severity": "low",
+      "title": "（桩）示例问题条目",
+      "detail": "用于验证 issues 聚合、标题去重与优先级排序",
+      "evidence": ["(stub)"],
+      "suggestion": "无（桩数据，不构成建议）"
+    }
+  ],
+  "suggestions": ["（桩）无建议"],
+  "score": 60,
+  "score_reasons": ["（桩）评分因子占位"]
+}

@@ -76,7 +76,7 @@ async function loadTasks() {
       return `<tr class="clickable" data-id="${esc(t.task_id)}">
         <td><code>${esc(t.task_id)}</code></td>
         <td>${esc(t.org)}/${esc(t.repo)}</td>
-        <td><span class="badge st-${t.status}">${t.status}</span></td>
+        <td><span class="badge st-${t.status}">${t.status}</span>${modeTag(t)}</td>
         <td><span class="progress"><i style="width:${pct}%"></i></span> ${p.completed}/${p.total}</td>
         <td>${esc((t.created_at || "").replace("T", " "))}</td>
         <td>${t.duration_seconds != null ? t.duration_seconds + "s" : "-"}</td>
@@ -126,8 +126,16 @@ async function refreshDetail() {
   } catch (e) { console.error(e); }
 }
 
+function modeTag(t) {
+  // 执行范围标注：桩/无AI/mock 的 AI 章节不是模型结论（DESIGN D16/D17）
+  if (t.no_ai) return '<span class="mode-tag" title="AI 子任务已跳过（--no-ai），评分按缺失维度归一化">无AI</span>';
+  if (t.ai_stub) return '<span class="mode-tag" title="AI 章节为 schema-valid 桩数据（--ai-stub），不可作为分析结论">桩</span>';
+  if (t.mock) return '<span class="mode-tag" title="mock 联调：子任务为模拟执行">mock</span>';
+  return "";
+}
+
 function renderTaskHead(t) {
-  $("#detail-title").innerHTML = `<code>${esc(t.task_id)}</code> <span class="badge st-${t.status}">${t.status}</span>`;
+  $("#detail-title").innerHTML = `<code>${esc(t.task_id)}</code> <span class="badge st-${t.status}">${t.status}</span>${modeTag(t)}`;
   $("#task-meta").innerHTML =
     `仓库 ${esc(t.org)}/${esc(t.repo)} · 基线 <code>${esc((t.commit_sha || "?").slice(0, 12))}</code>` +
     (t.ref ? `（ref=${esc(t.ref)}）` : "") +

@@ -1,0 +1,23 @@
+{
+  "knowledge": [
+    {"category": "业务领域概念", "summary": "（桩）领域概念条目，用于验证 knowledge 条目渲染", "evidence": ["(stub)"], "confidence": 50},
+    {"category": "业务规则", "summary": "（桩）业务规则条目，用于验证置信度中位数统计", "evidence": ["(stub)"], "confidence": 55},
+    {"category": "设计意图", "summary": "（桩）设计意图条目，用于验证证据计数与 gaps 汇总", "evidence": ["(stub)"], "confidence": 45},
+    {"category": "技术决策背景", "summary": "（桩）技术决策条目，用于满足 knowledge minItems=5", "evidence": ["(stub)"], "confidence": 60},
+    {"category": "运维部署知识", "summary": "（桩）运维部署条目，用于满足第 6 类枚举取值", "evidence": ["(stub)"], "confidence": 40}
+  ],
+  "gaps": [
+    {"topic": "（桩）信息缺口", "impact": "验证 gaps 渲染与计数", "suggestion": "无（桩数据）", "carrier": "(stub)"}
+  ],
+  "contradictions": [
+    {"type": "doc_vs_code", "description": "（桩）文档与实现矛盾占位", "evidence": ["(stub)"], "severity": "low"}
+  ],
+  "readiness": {
+    "completeness": 50,
+    "accuracy": 50,
+    "consistency": 50,
+    "conclusion": "（桩数据，非真实结论）接手就绪度四项字段用于验证评分与报告渲染链路。"
+  },
+  "score": 55,
+  "score_reasons": ["（桩）评分因子占位"]
+}

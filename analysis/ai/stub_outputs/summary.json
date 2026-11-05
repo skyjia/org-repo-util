@@ -1,0 +1,8 @@
+{
+  "executive_summary": "（桩数据，非真实结论）本执行摘要由 --ai-stub 生成，仅用于验证 ai.summary 的 schema 校验、评分注入、TOP 问题渲染与归档 HTML 组装链路。",
+  "top_issues": [
+    {"priority": "P2", "dimension": "quality", "title": "（桩）TOP 问题占位", "detail": "用于验证优先级徽标与维度列渲染", "evidence": ["(stub)"]}
+  ],
+  "roadmap": {"short": ["（桩）短期占位"], "mid": ["（桩）中期占位"], "long": ["（桩）长期占位"]},
+  "future_suggestions": ["（桩）无后续建议"]
+}

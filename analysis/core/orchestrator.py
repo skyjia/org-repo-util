@@ -102,6 +102,30 @@ class Orchestrator:
                 if st.status == SubtaskStatus.COMPLETED:
                     continue  # 幂等重入：跳过已完成
 
+                # --no-ai（M7 T706 用户决策）：AI 子任务在任何状态下都不得执行
+                # （retry 只级联重置下游子任务，未重置的仍是 skipped——若据此放行就会烧钱）
+                if task.no_ai and spec.type == "ai":
+                    if st.status != SubtaskStatus.SKIPPED:
+                        st.status = SubtaskStatus.SKIPPED
+                        st.skip_reason = config.NO_AI_SKIP_REASON
+                        self.store.save_task(task)
+                        self.store.append_event(task.task_id, "subtask_skipped",
+                                                subtask=name, message=st.skip_reason)
+                    continue
+
+                # AI 预算护栏（DESIGN D18）：本任务累计 AI 成本触顶 → 剩余 AI 计划跳过
+                if spec.type == "ai" and st.status != SubtaskStatus.SKIPPED and not task.ai_stub:
+                    spend = self._ai_spend(task)
+                    if spend >= config.MAX_TASK_AI_COST_USD:
+                        st.status = SubtaskStatus.SKIPPED
+                        st.skip_reason = (f"{config.SKIP_TAG_BUDGET}：本任务已累计 ${spend:.2f} "
+                                          f"≥ 上限 ${config.MAX_TASK_AI_COST_USD:.2f}，"
+                                          f"剩余 AI 子任务不再执行（评分按缺失维度归一化）")
+                        self.store.save_task(task)
+                        self.store.append_event(task.task_id, "subtask_skipped",
+                                                subtask=name, message=st.skip_reason)
+                        continue
+
                 # 空仓库守护（M7 T701）：无有效代码时跳过全部 AI 子任务与评分，
                 # archive 照常执行产出简版报告（零 AI 成本，用户决策 2026-11-05）
                 if spec.type == "ai" or spec.name == "scoring":
@@ -257,6 +281,10 @@ class Orchestrator:
             signal.signal(signal.SIGALRM, old_handler)
 
     # ---------- 依赖 / 收尾 ----------
+    def _ai_spend(self, task: Task) -> float:
+        """本任务已完成 AI 子任务的累计成本（单一实现在 TaskStore.ai_cost_usd）"""
+        return self.store.ai_cost_usd(task)
+
     def _no_code_guard(self, task: Task) -> str | None:
         """空仓库守护检查：生产代码行 < 阈值 → 返回 skip 原因；否则 None"""
         path = self.store.task_dir(task.task_id) / "collected" / "structure.json"
@@ -277,8 +305,14 @@ class Orchestrator:
         bad = []
         for dep in spec.deps:
             dep_st = task.subtasks.get(dep)
-            if dep_st is None or dep_st.status in (SubtaskStatus.FAILED, SubtaskStatus.SKIPPED):
+            if dep_st is None or dep_st.status == SubtaskStatus.FAILED:
                 bad.append(dep)
+            elif dep_st.status == SubtaskStatus.SKIPPED:
+                # 计划跳过（--no-ai / AI 预算护栏）不阻塞下游：scoring 按缺失维度归一化（决策 D4）
+                reason = dep_st.skip_reason or ""
+                if not (reason.startswith(config.SKIP_TAG_NO_AI)
+                        or reason.startswith(config.SKIP_TAG_BUDGET)):
+                    bad.append(dep)
         return bad
 
     def _finalize(self, task: Task) -> None:

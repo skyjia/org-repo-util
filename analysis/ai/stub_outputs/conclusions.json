@@ -1,0 +1,11 @@
+{
+  "dimensions": {
+    "structure": {"summary": "（桩）结构维度结论占位，用于验证 7 维渲染与切片读取", "findings": [{"severity": "low", "title": "（桩）结构发现", "detail": "占位", "evidence": ["(stub)"]}], "suggestions": ["（桩）无建议"]},
+    "dependencies": {"summary": "（桩）依赖维度结论占位，用于验证 issues 聚合来源标注", "findings": [{"severity": "low", "title": "（桩）依赖发现", "detail": "占位", "evidence": ["(stub)"]}], "suggestions": ["（桩）无建议"]},
+    "quality": {"summary": "（桩）质量维度结论占位，用于验证 lint 统计到结论的链路", "findings": [{"severity": "low", "title": "（桩）质量发现", "detail": "占位", "evidence": ["(stub)"]}], "suggestions": ["（桩）无建议"]},
+    "security": {"summary": "（桩）安全维度结论占位，用于验证 OSV 条目到结论的链路", "findings": [{"severity": "low", "title": "（桩）安全发现", "detail": "占位", "evidence": ["(stub)"]}], "suggestions": ["（桩）无建议"]},
+    "performance": {"summary": "（桩）性能维度结论占位，用于验证静态启发式到结论的链路", "findings": [{"severity": "low", "title": "（桩）性能发现", "detail": "占位", "evidence": ["(stub)"]}], "suggestions": ["（桩）无建议"]},
+    "docs": {"summary": "（桩）文档维度结论占位，用于验证 README 完整度到结论的链路", "findings": [{"severity": "low", "title": "（桩）文档发现", "detail": "占位", "evidence": ["(stub)"]}], "suggestions": ["（桩）无建议"]},
+    "tests": {"summary": "（桩）测试维度结论占位，用于验证测试代理指标到结论的链路", "findings": [{"severity": "low", "title": "（桩）测试发现", "detail": "占位", "evidence": ["(stub)"]}], "suggestions": ["（桩）无建议"]}
+  }
+}

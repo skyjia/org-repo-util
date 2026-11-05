@@ -67,6 +67,8 @@ class Task:
     status: TaskStatus = TaskStatus.QUEUED
     cancel_requested: bool = False
     mock: bool = False                     # M1 联调用：handler 未实现时以 sleep 模拟
+    no_ai: bool = False                    # M7：跳过全部 AI 子任务（采集/评分/归档照常，零 AI 成本）
+    ai_stub: bool = False                  # M7：AI 子任务返回 schema-valid 桩（开发/回归，报告不归档）
     schema_version: str = SCHEMA_VERSION
     created_at: str = field(default_factory=now_iso)
     started_at: Optional[str] = None

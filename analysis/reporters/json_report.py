@@ -185,6 +185,10 @@ def build_metadata(task: Task, outputs: dict[str, Optional[dict]]) -> dict:
     # 仓库分类：空仓库守护触发时标注（M7，报告展示简版说明）
     no_code = any((st.skip_reason or "").startswith("空仓库守护")
                   for st in task.subtasks.values())
+    # 分析范围：--no-ai 计划跳过（M7，AI 维度缺失、评分按剩余权重归一化）
+    deterministic_only = bool(task.no_ai) or any(
+        (st.skip_reason or "").startswith(config.SKIP_TAG_NO_AI)
+        for st in task.subtasks.values())
 
     return {
         "schema_version": config.SCHEMA_VERSION,
@@ -192,6 +196,8 @@ def build_metadata(task: Task, outputs: dict[str, Optional[dict]]) -> dict:
         "repo": task.repo,
         "task_id": task.task_id,
         "repository_class": "documentation_or_empty" if no_code else "code",
+        "analysis_scope": "deterministic_only" if deterministic_only else "full",
+        "ai_stub": bool(task.ai_stub),   # 桩数据（--ai-stub）：不可作为分析结论，且不归档
         "ref": task.ref,
         "commit_sha": task.commit_sha,
         "analyzed_at": task.finished_at or task.started_at,
