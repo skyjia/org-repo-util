@@ -33,6 +33,13 @@ audit/**/__pycache__/
 # Audit tool - Cache
 audit/cache/
 
+# Analysis tool - Python
+analysis/.venv/
+analysis/**/__pycache__/
+
+# Analysis tool - Runtime state (tasks/events/daemon)
+analysis/state/
+
 # Audit tool - Reports (already excluded above)
 # reports/
 
