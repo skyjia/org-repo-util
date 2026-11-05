@@ -318,6 +318,12 @@ vendor 资源（一次性下载入库）：`echarts.min.js`（~1MB）、`mermaid
 | D10 | 子任务产物先落 state/，归档时组装 | 增量落盘（REQ §4.1）与归档解耦；retry 不重复已完成工作 |
 | D11 | 孤儿任务自动重新入队续跑，而非标记 failed 等人工 retry | REQ v6 中断恢复要求：休眠/重启后无需人工干预；幂等重入保证不重复工作 |
 | D12 | 不安装 launchd 常驻服务，恢复由 CLI/Web 操作触发 | 保持「按需启动」轻量形态；重启后首次任意命令即恢复。若需全自动可后续补 launchd plist（可选项） |
+| D13 | Python/Shell 走 analysis 内置本地 lint（ruff / shellcheck），不扩 audit | M7 用户决策：audit 的 ESLint/golangci-lint/dotnet-format 体系不覆盖这两类语言；ruff 的 S 系列（bandit）结果同时供 security 维度复用，避免引入第二个安全扫描器 |
+| D14 | 生产代码 <100 行的仓库触发「空仓库守护」：跳过全部 AI 子任务与评分，归档仍出简版报告 | 文档/配置类仓库（augmn 125 仓中 9 个）AI 分析无产出物却要花 $2+；简版报告保留可核查的采集事实，`repository_class=documentation_or_empty` 显式标注（M7 用户决策） |
+| D15 | fork 与 archived 仓库在 `start` 预检阶段直接拒绝，不创建任务 | M7 用户决策：fork 是他人代码的副本、archived 是已停维仓库，分析结论对接手无意义；判定取自一次 `gh api`（同时读 `.fork`/`.archived`），**API 不可达或 404（非 GitHub 托管）时放行并落标注事件**，避免离线场景误杀 |
+| D16 | `--no-ai` 跳过的 AI 子任务属「计划跳过」，不阻塞下游 scoring | 与 failed/上游缺失跳过区分（靠 skip_reason 前缀 `--no-ai`）：零 AI 成本也要拿到采集层 + 归一化评分 + 归档报告，用于多语言回归与日常批量扫描；报告以 `analysis_scope=deterministic_only` 标注范围收窄 |
+| D17 | `--ai-stub`：AI 子任务返回 `ai/stub_outputs/*.json` 的 schema-valid 桩产物（`_ai_meta.stub=true`、cost=0），且**报告不写入 reports/** | 全流程（prompt 渲染 → jsonschema 校验 → 评分注入 → 归档渲染）可在 $0 下回归；桩产物同样过 schema 校验，schema 改动立刻由单测暴露。不归档 + HTML 顶部 🧪 横幅，杜绝把桩报告当真实结论消费（需求方 2026-11-05 决策） |
+| D18 | 单任务 AI 预算护栏 `MAX_TASK_AI_COST_USD=5`：累计触顶后剩余 AI 子任务「计划跳过」（不阻塞 scoring），`status`/`history` 显示累计成本与上限 | 真实事故驱动：T706 验证期间 `--no-ai` 任务被 `retry` 后误跑真实 AI，白烧 $1.52（已修复并加回归测试）。护栏让「误操作持续烧钱」有硬上界，同时不阻断报告产出 |
 
 ## 13. 里程碑规划（详见 ANALYSIS-DEV-PLAN.md）
 

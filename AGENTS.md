@@ -31,7 +31,7 @@ fish src/main.fish --help
 audit/bin/audit repo <path> [--save]
 
 # 仓库全面分析（Python 工具，见 analysis/ 与 ANALYSIS-DESIGN.md；需求 REPO-ANALYSIS-REQ.md）
-analysis/bin/analyze start <org>/<repo> [--ref <branch|tag|commit>]
+analysis/bin/analyze start <org>/<repo> [--ref <branch|tag|commit>] [--no-ai] [--ai-stub]
 analysis/bin/analyze ui                # Web 可视化：工作流/执行节奏/增量报告（按需启动）
 analysis/bin/analyze status | history | cancel | retry | resume | report | doctor
 ```
@@ -84,3 +84,7 @@ analysis/bin/analyze status | history | cancel | retry | resume | report | docto
 - analysis 混合执行：9 个确定性采集器（复用 audit 产物/lizard/OSV）+ 4 个 AI 子任务（`claude -p` 只读白名单 Read/Grep/Glob，解读型任务空白名单）+ 规则/AI 混合评分（9 维加权 → A–F）
 - analysis 全局串行流水线：子任务状态机 + 增量落盘（JSON/JSONL 文件存储）；中断自动恢复（daemon 心跳 + 孤儿任务自动重新入队 + `analyze resume`）；AI 产物标注 `_ai_meta` 非确定性
 - analysis 归档 HTML 为自包含单文件（内联 ECharts/mermaid，离线可分享）；Web 控制台按需启动（localhost，用完即退，与执行器解耦）
+- analysis 多语言（M7）：Python 走 ruff（E/F/W/S/B，S 系列 bandit 结果供 security 维度复用）、Shell 走 shellcheck；Dart/Java/Ruby 用 manifest 解析（pubspec/pom.xml+build.gradle/Gemfile.lock → OSV Pub/Maven/RubyGems）+ 语言特有启发式；复杂度通用走 lizard（Shell 不支持 → found:false 兜底）
+- analysis 三类闸门（均为用户决策，见 DESIGN D13–D16）：fork 与 archived 仓库在 `start` 预检阶段拒绝（一次 `gh api` 同取 `.fork`/`.archived`，API 不可达或 404 时放行并落标注事件）；生产代码 <100 行触发空仓库守护（跳过全部 AI 与评分，归档出简版报告，零 AI 成本）；`--no-ai` 跳过全部 AI 子任务但保留采集/评分/归档，属「计划跳过」不阻塞下游
+- ⚠️ daemon 不热更新：改动 `analysis/collectors/` 或 `core/` 后必须 `kill $(cat analysis/state/daemon.pid)` 并清理 `state/daemon.lock`/`daemon.pid` 残留，否则仍用旧代码执行（采集结论会静默失真）
+- ⚠️ 开发成本纪律（需求方要求，与工具运行时成本控制同等重要）：开发/测试过程**不得**为验证流程而调用真实 AI。三档零成本选择见 `analysis/README.md#开发成本纪律`——采集层回归用 `--no-ai`，全流程（含 prompt 渲染/schema 校验/评分/归档）用 `--ai-stub`（桩产物在 `analysis/ai/stub_outputs/`，报告不落 `reports/`），流水线联调用 `--mock`；真实 AI 只在 prompt/schema 变更后对小仓库抽检。另有单任务 AI 预算硬上界 `config.MAX_TASK_AI_COST_USD`（$5，触顶后剩余 AI 子任务计划跳过）

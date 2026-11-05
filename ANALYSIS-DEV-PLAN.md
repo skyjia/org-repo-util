@@ -117,35 +117,57 @@
   - 完成：2026-11-05。analysis/README（含 resume 与 Web 进程重启指引）、AGENTS.md 增补 audit/analyze 命令与架构注记、REQ 全部待决策项标记落定（schema v1 + prompt 体系）、DEV-PLAN 全程回填
   - 验收：新会话按 analysis/README.md 可独立跑通（setup.sh → doctor → start → ui → report）
 
-## 阶段 M7：多语言支持补足（2026-11-05 用户确认四项决策后启动）
+## 阶段 M7：多语言支持补足（2026-11-05 用户确认四项决策后启动；同日追加四项决策）✅ 已完成（P0+P1；P2 的 T705 搁置）
 
 > 背景：repos/augmn 125 仓库中，除 Go(24)/C#(17)/TS(15)/Vue(13)/JS(4) 外还有 Python(22)/Shell(9)/Dart(6)/Java(1)/Ruby(1)/HTML(1)/文档空仓库(9)/fork(2)。
 > 已确认决策：① 引入 ruff（Python）+ shellcheck（Shell）本地 lint；② P0+P1+P2 全部补足；③ 无代码仓库（生产代码 <100 行）跳过 AI 出简版报告；④ fork 仓库 start 预检拒绝，完全不分析。
-> 成本红线：全部补足位于确定性采集层，**AI token 零增量**；空仓库守护使 9 个文档仓库 AI 成本归零。
+> **追加决策（2026-11-05 T706 期间）**：⑤ archived 仓库同 fork 一律 start 拒绝（29/125 为归档仓库，REQ 与计划均未覆盖，DESIGN D15）；⑥ 验证分两阶段——采集层用新增 `--no-ai` 零成本跑，真实 AI 只对 Python/Shell/Dart 三仓库全量（DESIGN D16）；⑦ **开发成本纪律 + `--ai-stub` 桩执行 + 单任务 AI 预算护栏 $5**（需求方明确要求：token 消耗在开发测试过程同样要控住，DESIGN D17/D18）；⑧ **T705（Java/Ruby 支持包）搁置**——org 内唯二的 Java/Ruby 仓库都是 archived，按 ⑤ 一律不分析，本任务无验收载体（已交付的采集器代码与零成本 fixture 回归保留，不回退）。
+> 成本红线：全部补足位于确定性采集层，**AI token 零增量**；空仓库守护使 9 个文档仓库 AI 成本归零。M7 验证实际 AI 花费 **$6.98**（含一次误跑 $1.52），≤ $12 上限。
 
-- [ ] **T701** P0：空仓库守护 + fork 预检 + Python 增强
+- [x] **T701** P0：空仓库守护 + fork 预检 + Python 增强
   - 内容：orchestrator 守护（production lines <100 → ai.*/scoring 全部 skipped，archive 照常出简版报告）；service fork 预检（gh api .fork 字段，API 不可达放行并标注）；docs 采集器 Python docstring 改用 ast 精确统计；overview 优先读 repos/<org>-summary.json 语言分布（省 API 调用）；报告主语言 fallback 到本地统计
-  - 验收：ai-env-setup（空）走守护路径零 AI 成本出简版报告；sqlfluff（fork）start 被拒；单测覆盖
+  - 验收（2026-11-05 实测）：ai-env-setup（0 生产行）走守护路径 → 10/15 completed、5 skipped、`repository_class=documentation_or_empty`、`ai_usage.total_cost_usd=0.0`、简版 HTML 带📄横幅；sqlfluff `start` 被拒（gh api .fork=true 现场核对）；**归档仓库（追加决策⑤）同样被拒**：fe-casamiel-admin-app、ops-infrastructure；预检合并为单次 `gh api`（同取 .fork/.archived），404（非 GitHub 托管）与不可达均放行并落标注事件；单测 `test_multilang.py` 守护/拒绝/放行 6 项
 
 - [ ] **T702** P0：ruff lint 集成（Python 22 仓库）
   - 内容：`python -m ruff check --output-format json --select E,F,W,S,B`；quality 采集器聚合（severity 映射：E9/F82x→high、F/B→medium、E/W→low）；S 系列（bandit 安全规则）同时供 security 采集器引用
-  - 验收：对 ops-mdm/da-etl 产出 lint 统计；ruff 不可用时 found:false 兜底
+  - 验收（2026-11-05 实测，`--no-ai` 零成本）：**ops-mdm** `local_lint.ruff` = 207 条（high 3 / medium 65 / low 139，TOP：E501 113、F401 47、W291 11、S113 8），S 系列经 quality 产物传递给 security → `python_bandit_rules` 11 条（S113 8 / S311 2 / S105 1）；**da-etl**（197 个 .py / 21062 生产行）= **3282 条**（high 5 / medium 261 / low 3016，TOP：E501/W293/W291/W292/S608），`python_bandit_rules` **143 条**（S608 SQL 字符串拼接 96、S113 25、S506 8…）→ 评分 49.9 D；ruff 缺失/非 Python 仓库 → `found:false` + 建议文案（单测覆盖，含 `test_run_ruff_no_python`）
 
 - [ ] **T703** P1：Dart 支持包（6 仓库）
   - 内容：pubspec.yaml 依赖解析 → OSV Pub 生态；`import 'package:x'` 包级依赖图；`_test.dart`/test/ 测试识别 + flutter_test/test 框架；`//` 注释 + 大写开头公共 API 统计；危险模式（Process.run/dart:mirrors）；复杂度/lint found:false 兜底（不引入 Flutter SDK）
-  - 验收：fe-dropdown-textfield-ui 采集完整（依赖/测试/注释/图）
+  - 验收（2026-11-05 实测）：fe-dropdown-textfield-ui → `manifests_detected=["pubspec.yaml"]`、外部依赖 5 项、`dependency_graph.tool="pubspec + package import"`（含自引用排除）、`frameworks={"flutter_test":true}` + 2 个 `_test.dart`、Dart 注释 74/1717 行（4.31%）、`public_api_docs.Dart` 14 个公共 API（documented 0）、危险模式（dart_process_run/dart_mirrors）0 命中且入 patterns_matched 清单、OSV Pub 因 pubspec 为范围版本（^x.y.z）走规范兜底文案、复杂度走 lizard（files=3）、lint `found:false`（不引入 Flutter SDK）
 
 - [ ] **T704** P1：Shell 支持包（9 仓库）+ shellcheck
   - 内容：shellcheck lint（分批调用、severity 映射 error→high/warning→medium/info→low/style→info）；危险模式（eval、curl|bash、rm -rf 未引号变量、chmod 777）；source/. 脚本调用图；bats/*_test.sh 测试识别
-  - 验收：ops-k8s-deploy 产出 shellcheck 统计与调用图
+  - 验收（2026-11-05 实测）：ops-k8s-deploy（112 个 .sh / 1528 行）→ `local_lint.shellcheck` 659 条（high 110 / medium 172 / low 369 / info 8；TOP：SC2086 369、SC2148 109 缺 shebang、SC2164 105 缺 cd 失败检查、SC2154 64 未引用变量）、`dependency_graph.tool="shell source graph"`（脚本级 source/. 调用）、危险模式 `shell_rm_unquoted_var` 23 处 high、Shell 注释 244/1121（21.77%）、bats 未使用 → 测试框架兜底建议已按主语言给出「Shell: bats（配合 shellcheck）」；lizard 不支持 Shell → complexity files=0 兜底
 
-- [ ] **T705** P2：Java + Ruby 支持包（各 1 仓库）
-  - 内容：Java——pom.xml/build.gradle 解析 → OSV Maven、junit/mockito 识别、jacoco 产物、公共 API/javadoc 统计；Ruby——Gemfile.lock 精确版本 → OSV RubyGems、rspec/minitest、eval/system/Marshal 模式
-  - 验收：fe-casamiel-admin-app（Java）与 ops-infrastructure（Ruby）采集完整
+- [ ] **T705** P2：Java + Ruby 支持包 —— **已搁置**（2026-11-05 需求方决定；不计入 M7 完成项）
+  - 内容（原计划）：Java——pom.xml/build.gradle 解析 → OSV Maven、junit/mockito 识别、jacoco 产物、公共 API/javadoc 统计；Ruby——Gemfile.lock 精确版本 → OSV RubyGems、rspec/minitest、eval/system/Marshal 模式
+  - 搁置理由：org 内 Java 与 Ruby 各只有 1 个仓库（fe-casamiel-admin-app、ops-infrastructure），**两者均已 archived**；按需求方既定原则「fork 或 archived 的仓库一律不分析」，本任务没有可分析载体，端到端验收无法成立（两仓库 `analyze start` 均返回 archived 策略拒绝，已现场核对）。
+  - 已交付部分不回退：采集器代码（`_parse_pom` / `_parse_gemfile` / OSV Maven·RubyGems 生态 / junit·mockito·rspec·jacoco 识别 / `java_runtime_exec`·`java_deserialization`·`ruby_eval`·`ruby_marshal_load` 危险模式）在 a28f586 已落地，保留**零成本** fixture 回归 `test_multilang.py::test_javaruby_collectors_end_to_end`（语言统计 / manifest 解析 / OSV 入查 / 框架识别 / javadoc·rdoc 注释 / 公共 API / 危险模式 / lizard 复杂度）。若将来出现非归档 Java/Ruby 仓库，支持包可直接使用，只需补一次 `--no-ai` 采集层验证（$0）。
 
-- [ ] **T706** M7 集成验证与收尾
-  - 内容：6 个代表仓库端到端（Python: ops-mdm、Shell: ops-k8s-deploy、Dart: fe-dropdown-textfield-ui、Java: fe-casamiel-admin-app、Ruby: ops-infrastructure、空仓库: ai-env-setup）+ fork 拒绝验证（sqlfluff）；doctor 增补 ruff/shellcheck 检测；DESIGN 决策记录 D13-D15；README/AGENTS 更新
-  - 验收：代表仓库报告语言特有小节有数据或规范兜底标注；空仓库零 AI 成本；验证成本 ≤$12
+- [x] **T706** M7 集成验证与收尾（完成 2026-11-05）
+  - 内容：两阶段验证（追加决策⑥）+ 拒绝路径验证 + doctor 增补 ruff/shellcheck + DESIGN D13-D18 + README/AGENTS 更新 + 开发成本纪律落地（决策⑦：`--ai-stub`、预算护栏）
+  - **阶段一（$0，`--no-ai` / 空仓库守护）**：
+
+    | 任务 | 仓库 | 路径 | 结果 | AI 成本 |
+    |------|------|------|------|---------|
+    | 224457 | Shell ops-k8s-deploy | --no-ai | 11/15（4 AI skipped），55.2 D（missing 3） | $0.00 |
+    | 224458 | Dart fe-dropdown-textfield-ui | --no-ai | 11/15，70.2 C（missing 2） | $0.00 |
+    | 230735/233423 | Python ops-mdm | --no-ai | 11/15，56.5 D（missing 2；OSV 修复后重跑） | $0.00 |
+    | 224459 | 空仓库 ai-env-setup | 守护路径 | 10/15（4 AI + scoring skipped），简版报告 | $0.00 |
+    | 233300 | Shell ops-k8s-deploy | --ai-stub | **15/15**（4 AI 桩 0.0s），55.8 D，报告不落 reports/ | $0.00 |
+    | 234748 | Python da-etl | --no-ai | 11/15，49.9 D（ruff 3282 / bandit 143 / 197 个 .py） | $0.00 |
+
+  - **阶段二（真实 AI，3 仓库全量）**：ops-mdm $2.055 → 54.1 D（0 missing）、ops-k8s-deploy $1.543 → 51.7 D、fe-dropdown-textfield-ui $1.865 → 63.5 C；全部 15/15 completed
+  - **拒绝验证**：sqlfluff（fork）、fe-casamiel-admin-app + ops-infrastructure（archived）→ `start` 报错退出，`state/tasks/` 无残留任务目录
+  - **验证期间发现并修复**：
+    1. **OSV 对 PyPI 从未生效**（严重）：requirements.txt 解析出 `==5.2.0` 约束串，而查询要求 `^\d+\.\d+` → 22 个 Python 仓库的依赖漏洞全部静默 `found:false`，兜底文案还误导为"范围版本"。修复后 ops-mdm 实测 **45 依赖入查 / 11 包受影响 / 129 条漏洞**，安全维度从"无数据"变为有实测依据（同仓库评分 60.6 C → 54.1 D）；单测 2 项（PyPI 归一化 + Pub/Maven/RubyGems 生态映射）
+    2. **`--no-ai` 与 `retry` 交互导致真实 AI 误跑**：skip 分支条件写成「状态非 skipped 才跳过」，未列入级联的 AI 子任务在 retry 后反而放行执行，白烧 **$1.52**。改为「no_ai 时 AI 子任务任何状态都不得执行」，并加回归测试 `test_no_ai_survives_retry`（已验证：旧代码下该测试红）
+    3. 测试框架兜底建议只列 JS/Go/C#，M7 新语言未覆盖 → 改为按生产代码扩展名分布给出（实测 ops-k8s-deploy 输出「Shell: bats（配合 shellcheck）」）；CI 测试步骤正则补 bats/rspec/flutter test/mvn·gradle test
+    4. **daemon 不热更新**（操作坑）：改完 collectors/core 必须重启 daemon，否则旧代码继续执行 → 已写入 README 与 AGENTS.md
+    5. 兜底文案两处只列 M7 前的生态：测试框架建议（已由 `test_osv_multilang.py` 断言按主语言输出）与依赖清单未检出提示（补全 pubspec/pom/build.gradle/Gemfile/pyproject，da-etl 实测输出新文案）
+  - **开发成本纪律（需求方 2026-11-05 要求）**：`--ai-stub` schema-valid 桩（`ai/stub_outputs/*.json`，桩产物同样过 jsonschema；prompt 仍完整渲染并记录 `prompt_chars`；`_ai_meta.stub=true`、cost=0；报告只落 `state/tasks/<id>/report/`，不写 reports/ 且不动 latest 指针，HTML 顶部🧪横幅）+ 单任务 AI 预算护栏 `MAX_TASK_AI_COST_USD=$5`（触顶后剩余 AI「计划跳过」，不阻塞 scoring；`status`/`history` 显示累计成本与上限）→ DESIGN D17/D18，README 新增「开发成本纪律」三档选择表
+  - **收尾核对**：`analyze doctor` **17/17**（含 lint:ruff 0.17.3、lint:shellcheck）；单测 **54 → 74 全绿**（test_multilang 23 / test_osv_multilang 4 / test_dev_modes 6 + 既有 41）；M7 验证 AI 合计 **$6.98 ≤ $12**（其中事故 $1.52；6 次 `--no-ai` + 1 次 `--ai-stub` 均为 $0）
 
 ---
 
@@ -159,3 +181,6 @@
 | R4 | 归档 HTML 体积超 4MB 或 mermaid 浏览器渲染兼容问题 | T502 | 体积 4.4MB（mock 数据），可接受 |
 | R5 | madge/go 工具链缺失导致依赖图降级频繁 | T204/T601 | 待验证 |
 | R6 | 宿主机休眠期间 SIGALRM 时钟语义不可靠（唤醒后可能立即超时） | T551-T553 | 重试 + 自动续跑兜底，文档注明局限 |
+| R7 | archived 仓库（29/125）无处理策略，且占掉 M7 的 Java/Ruby 两个验证目标 | T705/T706 | 已决策⑤：与 fork 同等 `start` 拒绝；由此触发决策⑧——T705 搁置（采集器代码 + 零成本 fixture 回归保留，见 T705 条目） |
+| R8 | 开发/测试过程为验证全流程而调用真实 AI，成本不可控（实测一次误跑 $1.52） | T706 | 已决策⑦：`--no-ai`（采集层）/`--ai-stub`（全流程桩）/`--mock`（联调）三档零成本 + 单任务 $5 预算护栏 + 回归测试；纪律写入 README/AGENTS |
+| R9 | daemon 不热更新：改代码后旧 daemon 仍执行旧采集逻辑，结论静默失真 | T706 | 已文档化（README 重启指引 + AGENTS 警示）；如需自动化可在 M8 评估「daemon 按代码指纹自动退出重启」 |
