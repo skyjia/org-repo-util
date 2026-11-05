@@ -106,12 +106,20 @@ def _osv_query(deps: dict[str, dict]) -> dict:
     for name, info in deps.items():
         ver = str(info.get("version", "")).strip()
         eco = OSV_ECOSYSTEM_BY_MANIFEST.get(info.get("manifest", ""))
-        if not eco or not re.match(r"^v?\d+\.\d+", ver):
-            continue  # 范围版本/未知生态跳过
-        queries.append({"package": {"name": name.lstrip("v") if eco == "Go" else name,
+        if not eco:
+            continue
+        # PEP 440 固定版本：requirements.txt 存的是 "==5.2.0" 这类约束串，
+        # 去掉 == / === 前缀后才可查；>=、~=、< 等范围版本仍跳过
+        m = re.match(r"^(?:===|==)\s*(.+)$", ver)
+        if m:
+            ver = m.group(1)
+        pkg_name = name.split("[")[0]        # 去掉 PEP 440 extras（celery[redis] → celery）
+        if not re.match(r"^v?\d+\.\d+", ver):
+            continue                          # 范围版本/未知格式跳过
+        queries.append({"package": {"name": pkg_name.lstrip("v") if eco == "Go" else pkg_name,
                                     "ecosystem": eco},
                         "version": ver.lstrip("v") if eco == "Go" else ver})
-        meta.append({"name": name, "version": ver, "ecosystem": eco})
+        meta.append({"name": pkg_name, "version": ver, "ecosystem": eco})
         if len(queries) >= OSV_MAX_QUERIES:
             break
     if not queries:

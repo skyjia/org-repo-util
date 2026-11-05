@@ -405,8 +405,9 @@ class DependenciesCollector(Collector):
 
         return {
             "manifests_detected": manifests or [not_found(
-                "依赖清单", "未检测到 package.json/go.mod/*.csproj/requirements.txt；"
-                          "若仓库确无外部依赖可忽略本提示")],
+                "依赖清单", "未检测到依赖清单（package.json / go.mod / *.csproj / "
+                          "requirements.txt / pyproject.toml / pubspec.yaml / pom.xml / "
+                          "build.gradle / Gemfile[.lock]）；若仓库确无外部依赖可忽略本提示")],
             "external_dependencies": all_deps,
             "dependency_count": {"total": len(all_deps),
                                  "runtime": sum(1 for v in all_deps.values() if v["kind"] == "runtime"),

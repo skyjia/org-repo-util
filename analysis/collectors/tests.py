@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections import Counter
 from pathlib import Path
 
 from analysis.collectors.base import (
@@ -19,8 +20,32 @@ FRAMEWORK_MARKERS = {
 }
 
 TEST_STEP_PATTERN = re.compile(
-    r"(npm|yarn|pnpm)\s+(run\s+)?(test|e2e|coverage)|go\s+test|dotnet\s+test|pytest|phpunit",
+    r"(npm|yarn|pnpm)\s+(run\s+)?(test|e2e|coverage)|go\s+test|dotnet\s+test|pytest|phpunit"
+    # M7 多语言：Shell(bats/shellcheck) / Ruby(rspec) / Dart(flutter test) / Java(mvn|gradle test)
+    r"|\bbats\b|\brspec\b|flutter\s+test|\b(?:mvn|gradle|gradlew)\b[^\n|;&]*\btest\b",
     re.I)
+
+# M7：各语言生态的推荐测试框架（无测试时按仓库主语言给出针对性建议）
+FRAMEWORK_HINTS = {
+    ".ts": "TS: vitest/jest", ".tsx": "TS: vitest/jest", ".js": "JS: vitest/jest",
+    ".jsx": "JS: vitest/jest", ".vue": "Vue: vitest + @vue/test-utils",
+    ".go": "Go: go test + testify", ".cs": "C#: xunit/nunit",
+    ".py": "Python: pytest", ".sh": "Shell: bats（配合 shellcheck）",
+    ".bash": "Shell: bats（配合 shellcheck）", ".dart": "Dart/Flutter: flutter_test + mockito",
+    ".java": "Java: junit + mockito", ".rb": "Ruby: rspec/minitest",
+}
+
+
+def _framework_hint(ext_counts: Counter) -> str:
+    """按生产代码扩展名分布给出前 2 个生态的推荐框架"""
+    hints: list[str] = []
+    for ext, _ in ext_counts.most_common(2):
+        hint = FRAMEWORK_HINTS.get(ext)
+        if hint and hint not in hints:
+            hints.append(hint)
+    if hints:
+        return "、".join(hints)
+    return "pytest / bats / flutter_test / junit / rspec / vitest / go test / xunit（按主语言生态选择）"
 
 COVERAGE_ARTIFACTS = ("coverage/lcov.info", "coverage/coverage-final.json", "coverage.xml",
                       "cover.out", "coverage/index.html", ".coverage", "lcov.info",
@@ -124,6 +149,7 @@ class TestsCollector(Collector):
         prod_lines = 0
         empty_tests = []
         skipped_markers = 0
+        prod_ext_counts: Counter = Counter()      # 主语言推断用（兜底建议文案）
 
         for path in iter_files(root):
             rel = path.relative_to(root)
@@ -149,6 +175,7 @@ class TestsCollector(Collector):
                     test_files.append({"path": str(rel), "lines": len(lines)})
             else:
                 prod_lines += len(lines)
+                prod_ext_counts[rel.suffix.lower()] += 1
 
         # 覆盖率产物（REQ §2.2-4：如有则读取并标注）
         coverage_artifacts = []
@@ -167,7 +194,9 @@ class TestsCollector(Collector):
 
         return {
             "frameworks": frameworks or not_found(
-                "测试框架", "未识别到测试框架；建议引入与语言生态匹配的测试框架（JS: vitest/jest, Go: go test+testify, C#: xunit）"),
+                "测试框架",
+                f"未识别到测试框架；建议引入与语言生态匹配的测试框架"
+                f"（{_framework_hint(prod_ext_counts)}）"),
             "test_files_count": len(test_files),
             "test_files": sorted(test_files, key=lambda f: -f["lines"])[:30],
             "test_lines": test_lines,
