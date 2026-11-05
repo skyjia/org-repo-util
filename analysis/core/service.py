@@ -1,0 +1,170 @@
+"""共享服务层：CLI 与 Web API 复用的任务发起逻辑（设计决策 D8）"""
+
+from __future__ import annotations
+
+import subprocess
+from datetime import datetime
+from pathlib import Path
+
+from analysis.core import config
+from analysis.core import daemon as daemon_mod
+from analysis.core.models import SubtaskState, Task
+from analysis.core.registry import SUBTASK_SPECS
+from analysis.core.store import TaskStore
+
+
+class ServiceError(Exception):
+    pass
+
+
+def resolve_target(target: str) -> tuple[str, str]:
+    """解析 <org>/<repo> 或 <repo>（repos/ 下唯一匹配时推断 org）"""
+    parts = target.strip("/").split("/")
+    if len(parts) == 2 and all(parts):
+        return parts[0], parts[1]
+    if len(parts) == 1 and parts[0]:
+        candidates = sorted(c for c in config.REPOS_DIR.glob(f"*/{parts[0]}") if c.is_dir())
+        if len(candidates) == 1:
+            return candidates[0].parent.name, parts[0]
+        if not candidates:
+            raise ServiceError(f"未在 repos/ 下找到仓库 '{parts[0]}'，请用 <org>/<repo> 格式")
+        orgs = [c.parent.name for c in candidates]
+        raise ServiceError(f"仓库名 '{parts[0]}' 存在于多个组织 {orgs}，请用 <org>/<repo>")
+    raise ServiceError(f"无法解析目标: {target}（格式 <org>/<repo>）")
+
+
+def _git(repo: Path, *args: str) -> str:
+    proc = subprocess.run(["git", "-C", str(repo), *args],
+                          capture_output=True, text=True, timeout=60)
+    if proc.returncode != 0:
+        raise ServiceError(f"git {' '.join(args)} 失败: {proc.stderr.strip()}")
+    return proc.stdout.strip()
+
+
+def create_analysis_task(target: str, ref: str | None = None,
+                         mock: bool = False, store: TaskStore | None = None,
+                         start_daemon: bool = True) -> Task:
+    """创建分析任务并确保 daemon 运行；立即返回（REQ 第 7 章即时响应）"""
+    store = store or TaskStore()
+    org, repo = resolve_target(target)
+    repo_path = config.REPOS_DIR / org / repo
+    if not repo_path.exists():
+        raise ServiceError(f"仓库未克隆: {repo_path}（先执行 fish src/main.fish clone {org}）")
+
+    if ref:
+        _git(repo_path, "rev-parse", "--verify", f"{ref}^{{commit}}")  # 校验 ref 有效
+    commit_sha = _git(repo_path, "rev-parse", ref or "HEAD")
+
+    task_id = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}-{repo}"
+    if store.task_dir(task_id).exists():  # 同秒冲突防御
+        task_id += f"-{datetime.now().microsecond // 1000:03d}"
+
+    task = Task(task_id=task_id, org=org, repo=repo,
+                repo_path=f"repos/{org}/{repo}", ref=ref,
+                commit_sha=commit_sha, mock=mock)
+    task.subtasks = {s.name: SubtaskState(name=s.name, type=s.type) for s in SUBTASK_SPECS}
+    store.create_task(task)
+
+    if start_daemon:
+        daemon_mod.ensure_daemon(store)
+    return task
+
+
+def set_cancel(store: TaskStore, task_id: str) -> Task:
+    from analysis.core.models import TaskStatus
+    task = store.find_task(task_id)
+    if task.is_terminal:
+        raise ServiceError(f"任务已处于终态: {task.status.value}")
+    if task.status == TaskStatus.QUEUED:
+        task.status = TaskStatus.CANCELED
+        task.error = "用户取消（未开始执行）"
+        store.save_task(task)
+        store.append_event(task.task_id, "task_canceled", message="排队中取消")
+    else:
+        task.cancel_requested = True
+        store.save_task(task)
+        store.append_event(task.task_id, "log", message="已请求取消（当前子任务结束后生效）")
+    return task
+
+
+def set_retry(store: TaskStore, task_id: str, subtask: str | None = None) -> Task:
+    from analysis.core.models import SubtaskStatus, TaskStatus
+    task = store.find_task(task_id)
+    if task.status == TaskStatus.RUNNING:
+        raise ServiceError("任务执行中，不能 retry（可先 cancel）")
+    names = [subtask] if subtask else list(task.subtasks.keys())
+    if subtask and subtask not in task.subtasks:
+        raise ServiceError(f"无此子任务: {subtask}")
+    reset = 0
+    for name in names:
+        st = task.subtasks[name]
+        if st.status in (SubtaskStatus.FAILED, SubtaskStatus.SKIPPED):
+            st.status = SubtaskStatus.QUEUED
+            st.error = None
+            st.skip_reason = None
+            st.attempts = 0
+            reset += 1
+    if reset == 0:
+        raise ServiceError("没有可重试的 failed/skipped 子任务")
+    task.status = TaskStatus.QUEUED
+    task.cancel_requested = False
+    task.error = None
+    task.finished_at = None
+    store.save_task(task)
+    store.append_event(task.task_id, "task_queued", message=f"retry：重置 {reset} 个子任务")
+    daemon_mod.ensure_daemon(store)
+    return task
+
+
+def build_preview(store: TaskStore, task_id: str) -> dict:
+    """增量报告预览数据：completed 子任务产物摘要 + 未完成状态占位（REQ §4.3）"""
+    import json
+    from analysis.core.registry import SPECS_BY_NAME
+
+    task = store.find_task(task_id)
+    task_dir = store.task_dir(task.task_id)   # 用完整 id 定位目录（调用方可能传前缀）
+    chapters = {}
+    for spec in SPECS_BY_NAME.values():
+        st = task.subtasks.get(spec.name)
+        entry: dict = {
+            "status": st.status.value if st else "unknown",
+            "type": spec.type,
+            "description": spec.description,
+            "duration_seconds": st.duration_seconds if st else None,
+            "error": (st.error if st else None) or (st.skip_reason if st else None),
+            "data": None,
+        }
+        if st and st.output_file:
+            path = task_dir / st.output_file
+            if path.exists():
+                try:
+                    raw = json.loads(path.read_text(encoding="utf-8"))
+                    entry["data"] = _summarize_output(raw)
+                except json.JSONDecodeError:
+                    entry["data"] = {"_error": "产物解析失败"}
+        chapters[spec.name] = entry
+    return {"task": task.to_dict(), "chapters": chapters}
+
+
+def _summarize_output(raw: dict, limit: int = 4000) -> dict:
+    """产物摘要（控制 preview 响应体积）：截断大数组/长文本"""
+    import json
+
+    def shrink(obj, depth=0):
+        if depth > 4:
+            return "…"
+        if isinstance(obj, dict):
+            return {k: shrink(v, depth + 1) for k, v in list(obj.items())[:40]}
+        if isinstance(obj, list):
+            head = [shrink(v, depth + 1) for v in obj[:10]]
+            if len(obj) > 10:
+                head.append(f"…（共 {len(obj)} 项）")
+            return head
+        if isinstance(obj, str) and len(obj) > 400:
+            return obj[:400] + "…"
+        return obj
+
+    text = json.dumps(shrink(raw), ensure_ascii=False)
+    if len(text) > limit * 4:
+        return {"_truncated": True, **{k: shrink(v) for k, v in list(raw.items())[:20]}}
+    return shrink(raw)

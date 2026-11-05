@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>仓库分析报告 — {{ report.metadata.org }}/{{ report.metadata.repo }}</title>
+<style>
+:root{--bg:#f7f8fa;--card:#fff;--ink:#1f2430;--muted:#6b7280;--line:#e5e7eb;--acc:#2563eb;
+--ok:#16a34a;--warn:#d97706;--bad:#dc2626;--crit:#7f1d1d;}
+*{box-sizing:border-box}body{margin:0;font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink);line-height:1.6}
+a{color:var(--acc)}
+#layout{display:flex;min-height:100vh}
+nav#toc{width:230px;flex:none;background:#111827;color:#d1d5db;position:sticky;top:0;height:100vh;overflow-y:auto;padding:18px 0}
+nav#toc h2{font-size:13px;color:#9ca3af;padding:0 18px;margin:14px 0 6px;text-transform:uppercase;letter-spacing:.05em}
+nav#toc a{display:block;padding:6px 18px;color:#d1d5db;text-decoration:none;font-size:13.5px;border-left:3px solid transparent}
+nav#toc a:hover{background:#1f2937;border-left-color:var(--acc)}
+main{flex:1;min-width:0;padding:28px 36px 80px}
+header.rpt{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:22px 26px;margin-bottom:22px}
+header.rpt h1{margin:0 0 6px;font-size:24px}
+.meta{color:var(--muted);font-size:13px;display:flex;flex-wrap:wrap;gap:14px;margin-top:8px}
+.meta code{background:#eef2ff;padding:1px 6px;border-radius:4px;font-size:12px}
+section{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px 26px;margin-bottom:20px}
+section>h2{margin:0 0 14px;font-size:19px;border-bottom:1px solid var(--line);padding-bottom:8px}
+h3{font-size:15.5px;margin:18px 0 8px}
+table{border-collapse:collapse;width:100%;font-size:13px;margin:8px 0}
+th,td{border:1px solid var(--line);padding:6px 9px;text-align:left;vertical-align:top}
+th{background:#f3f4f6;font-weight:600;white-space:nowrap}
+tr:nth-child(even) td{background:#fafafa}
+td.num{text-align:right;font-variant-numeric:tabular-nums}
+.badge{display:inline-block;padding:1px 9px;border-radius:999px;font-size:12px;font-weight:600;color:#fff;white-space:nowrap}
+.grade-A{background:var(--ok)}.grade-B{background:#0891b2}.grade-C{background:var(--warn)}.grade-D{background:#ea580c}.grade-F{background:var(--bad)}
+.sev-critical{background:var(--crit)}.sev-high{background:var(--bad)}.sev-medium{background:var(--warn)}.sev-low{background:#64748b}.sev-unknown,.sev-info{background:#94a3b8}
+.pri-P0{background:var(--crit)}.pri-P1{background:var(--bad)}.pri-P2{background:var(--warn)}
+.conf-c90{background:var(--ok)}.conf-c70{background:#0891b2}.conf-c40{background:var(--warn)}.conf-c1{background:#ea580c}.conf-c0{background:var(--bad)}
+.missing{background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:10px 14px;font-size:13px;margin:8px 0}
+.notice{background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:10px 14px;font-size:13px;margin:8px 0}
+.evidence{color:var(--muted);font-size:12px;font-family:ui-monospace,monospace;word-break:break-all}
+.chart{width:100%;height:320px;margin:10px 0}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}@media(max-width:1100px){.grid2{grid-template-columns:1fr}}
+details{margin:8px 0}details>summary{cursor:pointer;font-weight:600;font-size:13.5px;color:var(--acc)}
+.filters{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
+.filters button{border:1px solid var(--line);background:#fff;border-radius:999px;padding:3px 14px;font-size:13px;cursor:pointer}
+.filters button.active{background:var(--acc);color:#fff;border-color:var(--acc)}
+.kpi{display:flex;gap:16px;flex-wrap:wrap;margin:10px 0}
+.kpi .box{flex:1;min-width:150px;background:#f9fafb;border:1px solid var(--line);border-radius:10px;padding:12px 16px}
+.kpi .box b{display:block;font-size:22px}.kpi .box span{font-size:12.5px;color:var(--muted)}
+.mermaid{background:#fff;text-align:center;margin:10px 0}
+blockquote{border-left:3px solid var(--acc);margin:8px 0;padding:4px 14px;color:#374151;background:#f8fafc}
+ul.tight{margin:6px 0;padding-left:22px}ul.tight li{margin:3px 0}
+.footer{color:var(--muted);font-size:12px;text-align:center;margin-top:30px}
+</style>
+</head>
+<body>
+{% macro sev(s) %}<span class="badge sev-{{ s or 'unknown' }}">{{ s or '?' }}</span>{% endmacro %}
+{% macro pri(p) %}<span class="badge pri-{{ p or 'P2' }}">{{ p or 'P2' }}</span>{% endmacro %}
+{% macro conf(c) %}{% set ci = (c or 0)|round(0,'floor')|int %}<span class="badge conf-{{ 'c90' if ci>=90 else 'c70' if ci>=70 else 'c40' if ci>=40 else 'c1' if ci>=1 else 'c0' }}">{{ ci }}%</span>{% endmacro %}
+{% macro notfound(obj, label) %}
+{% if obj and obj.get('found') == false %}
+<div class="missing">⚠️ 未发现{{ obj.what or obj.get('reason') or label }} — {{ obj.suggestion or '' }}</div>
+{% elif obj is none %}<div class="missing">⚠️ {{ label }}数据缺失（对应子任务未完成）</div>{% endif %}
+{% endmacro %}
+{% macro conclusion_block(c) %}
+{% if c %}
+<h3>结论与建议 <span class="badge sev-info">AI 生成</span></h3>
+<p>{{ c.summary or '' }}</p>
+{% if c.findings %}<table><tr><th>严重度</th><th>问题</th><th>详情</th><th>证据</th></tr>
+{% for f in c.findings %}<tr><td>{{ sev(f.severity) }}</td><td>{{ f.title }}</td><td>{{ f.detail or '' }}</td><td class="evidence">{{ (f.evidence or [])|join(', ') }}</td></tr>{% endfor %}</table>{% endif %}
+{% if c.suggestions %}<ul class="tight">{% for s in c.suggestions %}<li>{{ s }}</li>{% endfor %}</ul>{% endif %}
+{% else %}<div class="missing">⚠️ 维度结论缺失（ai.conclusions 子任务未完成）</div>{% endif %}
+{% endmacro %}
+
+{% set meta = report.metadata or {} %}
+{% set scores = report.scores or {} %}
+{% set dims = scores.dimensions or {} %}
+{% set sm = (report.chapters.summary.data if report.chapters.summary else none) %}
+{% set issues = report.issues or [] %}
+
+<div id="layout">
+<nav id="toc">
+<h2>目录</h2>
+<a href="#exec">执行摘要与评分</a>
+<a href="#overview">1. 仓库概述</a>
+<a href="#structure">2. 代码结构</a>
+<a href="#dependencies">3. 依赖关系</a>
+<a href="#quality">4. 代码质量</a>
+<a href="#security">5. 安全性</a>
+<a href="#performance">6. 性能</a>
+<a href="#docs">7. 文档和注释</a>
+<a href="#tests">8. 测试</a>
+<a href="#architecture">9. 架构</a>
+<a href="#business">10. 业务知识还原</a>
+<a href="#issues">11. 问题总清单</a>
+<a href="#summary">12. 总结与建议</a>
+<h2>元信息</h2>
+<a href="#appendix">附录：子任务状态</a>
+</nav>
+<main>
+
+<header class="rpt">
+<h1>仓库分析报告：{{ meta.org }}/{{ meta.repo }}
+{% if scores.grade %}<span class="badge grade-{{ scores.grade }}" style="font-size:16px">{{ scores.grade }} · {{ scores.total }}</span>{% endif %}
+</h1>
+<div class="meta">
+<span>分析时间 {{ meta.analyzed_at or '?' }}</span>
+<span>基线 <code>{{ (meta.commit_sha or '?')[:12] }}</code>{% if meta.ref %}（ref={{ meta.ref }}）{% endif %}</span>
+<span>耗时 {{ meta.duration_seconds or '?' }}s</span>
+<span>生成器 {{ (meta.generator or {}).name }} v{{ (meta.generator or {}).version }}</span>
+</div>
+<details><summary>数据来源与局限声明（纯静态分析）</summary>
+<ul class="tight">
+{% for l in (meta.limitations or []) %}<li>{{ l }}</li>{% endfor %}
+{% for a in (meta.audit_refs or []) %}<li>audit 产物（{{ a.dimension }}）：审计时间 {{ a.audit_generated_at or '未知' }} — {{ a.staleness_note or '' }}</li>{% endfor %}
+</ul></details>
+</header>
+
+<section id="exec">
+<h2>执行摘要与健康度评分</h2>
+{% if sm and sm.executive_summary %}<blockquote>{{ sm.executive_summary }}</blockquote>
+{% else %}<div class="missing">⚠️ 执行摘要缺失（ai.summary 子任务未完成）</div>{% endif %}
+<div class="grid2">
+<div><h3>维度评分（权重加权 → 总分 {{ scores.total if scores.total is not none else '?' }} / 等级 {{ scores.grade or '?' }}）</h3>
+<div id="chart-scores" class="chart"></div>
+{% if scores.missing_dimensions %}<div class="notice">{{ scores.normalization_note }}</div>{% endif %}
+</div>
+<div><h3>TOP 问题</h3>
+{% if sm and sm.top_issues %}<table><tr><th>优先级</th><th>维度</th><th>问题</th></tr>
+{% for t in sm.top_issues %}<tr><td>{{ pri(t.priority) }}</td><td>{{ t.dimension or '-' }}</td><td>{{ t.title }}{% if t.detail %}<div class="evidence">{{ t.detail }}</div>{% endif %}</td></tr>{% endfor %}</table>
+{% else %}<div class="missing">⚠️ 无 TOP 问题数据</div>{% endif %}
+</div></div>
+<details><summary>各维度评分因子明细</summary>
+{% for dim, v in dims.items() %}
+<h3>{{ dim }} — {{ v.score if v.score is not none else '缺失' }} 分（权重 {{ v.weight }}%，{{ 'AI 评分' if v.source=='ai' else ('规则评分' if v.source=='rule' else '数据缺失') }}）</h3>
+{% if v.missing_reason %}<div class="missing">{{ v.missing_reason }}</div>{% endif %}
+{% if v.factors %}<ul class="tight">{% for f in v.factors %}<li>{{ f.factor }}{% if f.impact is not none and f.impact != 0 %}（{{ '%+.1f'|format(f.impact) }}）{% endif %}：{{ f.detail }}</li>{% endfor %}</ul>{% endif %}
+{% endfor %}</details>
+</section>
+
+<section id="overview">
+<h2>1. 仓库概述</h2>
+{% set ov = report.chapters.overview.data if report.chapters.overview else none %}
+{{ notfound(ov, '仓库概述') }}
+{% if ov %}
+{% set gh = ov.github or {} %}
+{% set g = ov.git or {} %}
+<div class="kpi">
+<div class="box"><b>{{ g.total_commits or '?' }}</b><span>总 commit 数</span></div>
+<div class="box"><b>{{ (g.branches or [])|length }}</b><span>分支数</span></div>
+<div class="box"><b>{{ g.tag_count if g.tag_count is not none else '?' }}</b><span>标签数</span></div>
+<div class="box"><b>{{ (gh.size_kb ~ ' KB') if gh.size_kb else '?' }}</b><span>仓库大小</span></div>
+</div>
+<table>
+<tr><th>项</th><th>值</th><th>来源</th></tr>
+<tr><td>描述</td><td>{{ gh.description or '—' }}</td><td>GitHub API</td></tr>
+<tr><td>所有者/组织</td><td>{{ gh.owner or ov.org }}</td><td>GitHub API</td></tr>
+<tr><td>创建时间</td><td>{{ gh.created_at or '未获取' }}</td><td>GitHub API</td></tr>
+<tr><td>最近更新</td><td>{{ gh.pushed_at or gh.updated_at or '未获取' }}</td><td>GitHub API</td></tr>
+<tr><td>首次 commit</td><td>{{ g.first_commit_at or '—' }}</td><td>本地 git</td></tr>
+<tr><td>最近 commit</td><td>{{ g.last_commit_at or '—' }}</td><td>本地 git</td></tr>
+<tr><td>主要语言</td><td>{{ gh.primary_language or '—' }}</td><td>GitHub API</td></tr>
+<tr><td>默认分支</td><td>{{ gh.default_branch or '—' }}</td><td>GitHub API</td></tr>
+<tr><td>最近标签</td><td>{{ (g.recent_tags or [])|join(', ') or '—' }}</td><td>本地 git</td></tr>
+</table>
+{% if gh.get('found') == false %}<div class="missing">⚠️ {{ gh.suggestion }}</div>{% endif %}
+{% if ov._meta_crosscheck %}<div class="notice">{{ ov._meta_crosscheck.note }}（GitHub: {{ ov._meta_crosscheck.github_created_at }} / git: {{ ov._meta_crosscheck.git_first_commit_at }}）</div>{% endif %}
+{% if ov.languages and ov.languages.get('found') != false %}<h3>语言构成（GitHub API，bytes）</h3><table>{% for k,v in ov.languages.items() %}<tr><td>{{ k }}</td><td class="num">{{ v }}</td></tr>{% endfor %}</table>{% endif %}
+{% endif %}
+</section>
+
+<section id="structure">
+<h2>2. 代码结构分析</h2>
+{% set st = report.chapters.structure.data if report.chapters.structure else none %}
+{{ notfound(st, '代码结构') }}
+{% if st %}
+{% set cats = st.categories or {} %}
+<div class="kpi">
+<div class="box"><b>{{ st.total_files if st.total_files is not none else '?' }}</b><span>文件总数</span></div>
+<div class="box"><b>{{ st.primary_language or '?' }}</b><span>主语言</span></div>
+<div class="box"><b>{{ (cats.production or {}).lines or 0 }}</b><span>生产代码行</span></div>
+<div class="box"><b>{{ (cats.test or {}).lines or 0 }}</b><span>测试代码行</span></div>
+<div class="box"><b>{{ (cats.generated_or_vendored or {}).lines or 0 }}</b><span>生成/vendored 行</span></div>
+</div>
+<div class="grid2">
+<div><h3>语言分布（代码行）</h3><div id="chart-langs" class="chart"></div></div>
+<div><h3>顶层目录</h3><table><tr><th>目录</th><th>文件</th><th>行数</th></tr>
+{% for name, e in (st.top_level_dirs or {}).items() %}<tr><td><code>{{ name }}</code></td><td class="num">{{ e.files }}</td><td class="num">{{ e.lines }}</td></tr>{% endfor %}</table></div>
+</div>
+{% if st.longest_files %}<h3>最长文件 TOP {{ st.longest_files|length }}</h3>
+<table><tr><th>文件</th><th>行数</th></tr>{% for f in st.longest_files %}<tr><td class="evidence">{{ f.path }}</td><td class="num">{{ f.lines }}</td></tr>{% endfor %}</table>{% endif %}
+{% if st.exclusion_disclosure %}<div class="notice">{{ st.exclusion_disclosure }}</div>{% endif %}
+{{ conclusion_block((report.chapters.structure.conclusion if report.chapters.structure else none)) }}
+{% endif %}
+</section>
+
+<section id="dependencies">
+<h2>3. 依赖关系分析</h2>
+{% set dp = report.chapters.dependencies.data if report.chapters.dependencies else none %}
+{{ notfound(dp, '依赖数据') }}
+{% if dp %}
+{% set dc = dp.dependency_count or {} %}
+{% set pr = dp.get('pinned_ratio') if dp.get is defined else none %}
+<div class="kpi">
+<div class="box"><b>{{ dc.total or 0 }}</b><span>直接依赖（运行时 {{ dc.runtime or 0 }} / 开发 {{ dc.development or 0 }}）</span></div>
+<div class="box"><b>{{ '%.0f%%'|format(pr*100) if pr is not none else '?' }}</b><span>版本锁定率</span></div>
+<div class="box"><b>{{ (dp.unpinned_versions or {}).count or 0 }}</b><span>范围版本依赖</span></div>
+</div>
+<h3>依赖图（模块级）</h3>
+{% set g = dp.dependency_graph %}
+{% if g and g.get('found') == false %}<div class="missing">⚠️ 依赖图省略 — {{ g.reason }}；建议：{{ g.suggestion }}</div>
+{% elif g %}<div class="notice">工具：{{ g.tool }} · 节点 {{ (g.nodes or [])|length }} · 边 {{ (g.edges or [])|length }}</div><div id="chart-deps" class="chart" style="height:420px"></div>
+{% else %}<div class="missing">⚠️ 无依赖图数据</div>{% endif %}
+<details><summary>外部依赖清单（{{ dc.total or 0 }}）</summary>
+<table><tr><th>依赖</th><th>版本</th><th>类型</th><th>来源</th></tr>
+{% for name, info in (dp.external_dependencies or {}).items() %}<tr><td>{{ name }}</td><td>{{ info.version }}</td><td>{{ info.kind }}</td><td>{{ info.manifest }}</td></tr>{% endfor %}</table></details>
+{% if (dp.unpinned_versions or {}).packages %}<div class="missing">范围版本依赖（构建可复现性风险）：{{ dp.unpinned_versions.packages|join(', ') }}</div>{% endif %}
+{{ conclusion_block(report.chapters.dependencies.conclusion if report.chapters.dependencies else none) }}
+{% endif %}
+</section>
+
+<section id="quality">
+<h2>4. 代码质量分析</h2>
+{% set q = report.chapters.quality.data if report.chapters.quality else none %}
+{{ notfound(q, '质量数据') }}
+{% if q %}
+{% set lint = q.style_lint or {} %}
+<h3>风格与规范检查（复用 audit 产物，REQ §1.3）</h3>
+{% if lint.get('source') == 'audit' %}
+<div class="notice">来源：audit（{{ lint.audit_generated_at or '时间未知' }}）— {{ lint.staleness_note or '' }}</div>
+<p>共 {{ lint.total }} 个问题：{% for s,c in (lint.by_severity or {}).items() %}{{ sev(s) }} {{ c }} {% endfor %}</p>
+<table><tr><th>规则</th><th>数量</th></tr>{% for r in (lint.top_rules or []) %}<tr><td><code>{{ r.rule }}</code></td><td class="num">{{ r.count }}</td></tr>{% endfor %}</table>
+<details><summary>问题样例（前 {{ (lint.sample or [])|length }} 条）</summary><table><tr><th>位置</th><th>严重度</th><th>规则</th><th>消息</th></tr>
+{% for i in (lint.sample or []) %}<tr><td class="evidence">{{ i.file }}:{{ i.line }}</td><td>{{ sev(i.severity) }}</td><td>{{ i.rule }}</td><td>{{ i.message }}</td></tr>{% endfor %}</table></details>
+{% else %}<div class="missing">⚠️ {{ lint.suggestion or '无 lint 数据' }}</div>{% endif %}
+{% set cx = q.complexity or {} %}
+{% if cx.functions_analyzed is defined and cx.functions_analyzed is not none %}
+<h3>复杂度（{{ cx.tool or 'lizard' }}）</h3>
+<div class="kpi">
+<div class="box"><b>{{ cx.functions_analyzed }}</b><span>分析函数数</span></div>
+<div class="box"><b>{{ cx.average_ccn if cx.average_ccn is not none else '?' }}</b><span>平均圈复杂度</span></div>
+<div class="box"><b>{{ cx.high_ccn_count or 0 }}</b><span>CCN&gt;25 函数</span></div>
+<div class="box"><b>{{ cx.medium_ccn_count or 0 }}</b><span>CCN&gt;15 函数</span></div>
+</div>
+{% if cx.top_complex_functions %}<details open><summary>最复杂函数 TOP {{ cx.top_complex_functions|length }}</summary>
+<table><tr><th>函数</th><th>位置</th><th>CCN</th><th>长度</th></tr>
+{% for f in cx.top_complex_functions %}<tr><td>{{ f.function }}</td><td class="evidence">{{ f.path }}:{{ f.line }}</td><td class="num">{{ f.ccn }}</td><td class="num">{{ f.length }}</td></tr>{% endfor %}</table></details>{% endif %}
+{% elif cx.get('found') == false %}<div class="missing">⚠️ {{ cx.suggestion }}</div>{% endif %}
+{% if q.code_smells %}<h3>代码异味</h3><ul class="tight">{% for s in q.code_smells %}<li>{{ sev(s.severity) }} <b>{{ s.smell }}</b>：{{ s.detail }}</li>{% endfor %}</ul>{% endif %}
+{{ conclusion_block(report.chapters.quality.conclusion if report.chapters.quality else none) }}
+{% endif %}
+</section>
+
+<section id="security">
+<h2>5. 安全性分析</h2>
+{% set sec = report.chapters.security.data if report.chapters.security else none %}
+{{ notfound(sec, '安全数据') }}
+{% if sec %}
+<h3>依赖已知漏洞（OSV 查询式匹配，未执行代码）</h3>
+{% set osv = sec.dependency_vulnerabilities or {} %}
+{% if osv.get('found') %}
+{% if osv.vulnerable %}<table><tr><th>包</th><th>版本</th><th>漏洞</th><th>链接</th></tr>
+{% for v in osv.vulnerable %}<tr><td>{{ v.package }}</td><td>{{ v.version }}</td><td>{{ sev((v.severity or 'unknown')|lower) }} {{ v.id }}</td><td><a href="{{ v.url }}">{{ v.url }}</a></td></tr>{% endfor %}</table>
+{% else %}<div class="notice">✅ 已查询 {{ osv.queried }} 个精确版本依赖，未匹配到已知漏洞</div>{% endif %}
+{% else %}<div class="missing">⚠️ {{ osv.reason or osv.suggestion or osv.what or '漏洞匹配不可用' }}</div>{% endif %}
+<h3>audit 安全扫描（复用产物）</h3>
+{% set asec = sec.audit_security or {} %}
+{% if asec.get('source') == 'audit' %}<div class="notice">审计时间 {{ asec.audit_generated_at or '未知' }} — {{ asec.staleness_note or '' }}</div><p>共 {{ asec.total }} 个安全问题：{% for s,c in (asec.by_severity or {}).items() %}{{ sev(s) }} {{ c }} {% endfor %}</p>
+{% else %}<div class="missing">⚠️ {{ asec.suggestion or asec.what or '无 audit 安全数据' }}</div>{% endif %}
+<h3>静态启发式（疑似项，需人工复核）</h3>
+{% set sh = sec.static_heuristics or {} %}
+{% if sh.boundary_note %}<div class="notice">{{ sh.boundary_note }}</div>{% endif %}
+{% if sh.patterns_matched %}<table><tr><th>模式</th><th>命中</th><th>样例证据</th></tr>
+{% for p, c in sh.patterns_matched.items() %}<tr><td><code>{{ p }}</code></td><td class="num">{{ c }}</td><td class="evidence">{% for h in ((sh.hits or {}).get(p) or [])[:2] %}{{ h.file }}:{{ h.line }} {{ h.evidence }}<br>{% endfor %}</td></tr>{% endfor %}</table>
+{% else %}<p>未命中危险模式</p>{% endif %}
+{% if sec.best_practices %}<h3>安全最佳实践</h3><ul class="tight">
+{% for k, v in sec.best_practices.items() %}<li>{% if v %}✅{% else %}❌{% endif %} {{ k }}</li>{% endfor %}</ul>{% endif %}
+{% set rep = sec.existing_security_reports or {} %}
+{% if rep.get('found') %}<h3>仓库内安全测试报告</h3><ul class="tight">{% for f in (rep.files or []) %}<li class="evidence">{{ f }}</li>{% endfor %}</ul>
+{% elif rep.suggestion %}<div class="missing">⚠️ {{ rep.suggestion }}</div>{% endif %}
+{{ conclusion_block(report.chapters.security.conclusion if report.chapters.security else none) }}
+{% endif %}
+</section>
+
+<section id="performance">
+<h2>6. 性能分析</h2>
+{% set pf = report.chapters.performance.data if report.chapters.performance else none %}
+{{ notfound(pf, '性能数据') }}
+{% if pf %}
+<div class="missing"><b>边界声明：</b>{{ pf.boundary_declaration or '静态启发式分析，未运行性能测试' }}</div>
+<h3>疑似反模式统计</h3>
+<div class="kpi">{% for k, v in (pf.antipattern_counts or {}).items() %}<div class="box"><b>{{ v }}</b><span>{{ k }}</span></div>{% endfor %}</div>
+{% for name, hits in (pf.hits or {}).items() %}{% if hits %}
+<details><summary>{{ name }}（{{ hits|length }} 处样例）</summary><table><tr><th>位置</th><th>证据</th></tr>
+{% for h in hits %}<tr><td class="evidence">{{ h.file }}:{{ h.line }}</td><td class="evidence">{{ h.evidence }}</td></tr>{% endfor %}</table></details>{% endif %}{% endfor %}
+{% set bm = pf.benchmark_artifacts or {} %}
+{% if bm.get('found') %}<h3>仓库已有 benchmark 产物</h3><ul class="tight">{% for f in (bm.files or []) %}<li class="evidence">{{ f }}</li>{% endfor %}</ul><div class="notice">{{ bm.note }}</div>
+{% elif bm.suggestion %}<div class="missing">⚠️ {{ bm.suggestion }}</div>{% endif %}
+{{ conclusion_block(report.chapters.performance.conclusion if report.chapters.performance else none) }}
+{% endif %}
+</section>
+
+<section id="docs">
+<h2>7. 文档和注释分析</h2>
+{% set dc = report.chapters.docs.data if report.chapters.docs else none %}
+{{ notfound(dc, '文档数据') }}
+{% if dc %}
+{% set rm = dc.readme or {} %}
+{% if rm.get('found') %}<h3>README（{{ rm.lines }} 行，完整度 {{ '%.0f%%'|format((rm.completeness or 0)*100) }}）</h3>
+<p>{% for k, v in (rm.sections or {}).items() %}<span class="badge {{ 'conf-c90' if v else 'sev-high' }}">{{ k }} {{ '✓' if v else '✗' }}</span> {% endfor %}</p>
+{% else %}<div class="missing">⚠️ {{ rm.suggestion or 'README 缺失' }}</div>{% endif %}
+<div class="kpi">
+<div class="box"><b>{{ '%.1f%%'|format((dc.overall_comment_ratio or 0)*100) }}</b><span>总体注释率</span></div>
+<div class="box"><b>{{ '有' if (dc.api_docs or {}).get('found') else '无' }}</b><span>API 文档</span></div>
+<div class="box"><b>{{ (dc.docs_dir_files or [])|length }}</b><span>docs/ 文档数</span></div>
+</div>
+<h3>注释统计（按语言）</h3><table><tr><th>语言</th><th>代码行</th><th>注释行</th><th>注释率</th><th>公共 API 文档化</th></tr>
+{% for lang, s in (dc.comment_stats or {}).items() %}<tr><td>{{ lang }}</td><td class="num">{{ s.code_lines }}</td><td class="num">{{ s.comment_lines }}</td><td class="num">{{ '%.1f%%'|format((s.comment_ratio or 0)*100) }}</td><td>{% set a = (dc.public_api_docs or {}).get(lang) %}{% if a and a.public_apis %}{{ a.documented }}/{{ a.public_apis }}（{{ '%.0f%%'|format((a.documented_ratio or 0)*100) }}）{% else %}—{% endif %}</td></tr>{% endfor %}</table>
+{{ conclusion_block(report.chapters.docs.conclusion if report.chapters.docs else none) }}
+{% endif %}
+</section>
+
+<section id="tests">
+<h2>8. 测试分析</h2>
+{% set ts = report.chapters.tests.data if report.chapters.tests else none %}
+{{ notfound(ts, '测试数据') }}
+{% if ts %}
+{% if ts.coverage_static_note %}<div class="notice">{{ ts.coverage_static_note }}</div>{% endif %}
+<div class="kpi">
+<div class="box"><b>{{ ts.test_files_count or 0 }}</b><span>测试文件数</span></div>
+<div class="box"><b>{{ '%.1f%%'|format((ts.test_to_production_ratio or 0)*100) }}</b><span>测试/生产代码比</span></div>
+<div class="box"><b>{{ '是' if (ts.ci or {}).get('runs_tests_in_ci') else ('否' if (ts.ci or {}).get('found') else '?') }}</b><span>CI 执行测试</span></div>
+<div class="box"><b>{{ (ts.empty_or_assertion_free_tests or [])|length }}</b><span>无断言测试文件</span></div>
+</div>
+<h3>测试框架</h3>
+{% set fw = ts.frameworks or {} %}
+{% if fw and fw.get('found') != false %}<ul class="tight">{% for k, v in fw.items() %}<li><b>{{ k }}</b>: {{ v }}</li>{% endfor %}</ul>
+{% else %}<div class="missing">⚠️ {{ fw.suggestion or '未识别到测试框架' }}</div>{% endif %}
+{% set cov = ts.coverage_artifacts or {} %}
+{% if cov.get('found') %}<h3>已有覆盖率产物</h3><table><tr><th>文件</th><th>mtime</th></tr>{% for f in (cov.files or []) %}<tr><td class="evidence">{{ f.path }}</td><td>{{ f.generated_at_file_mtime }}</td></tr>{% endfor %}</table><div class="notice">{{ cov.note }}</div>
+{% elif cov.suggestion %}<div class="missing">⚠️ {{ cov.suggestion }}</div>{% endif %}
+{% if (ts.ci or {}).get('found') and ts.ci.workflows %}<h3>CI 工作流（只读配置）</h3><table><tr><th>工作流</th><th>测试步骤</th></tr>{% for w in ts.ci.workflows %}<tr><td>{{ w.workflow }}</td><td>{{ (w.test_steps_found or [])|join(', ') or '未发现' }}</td></tr>{% endfor %}</table>{% endif %}
+{{ conclusion_block(report.chapters.tests.conclusion if report.chapters.tests else none) }}
+{% endif %}
+</section>
+
+<section id="architecture">
+<h2>9. 架构分析 <span class="badge sev-info">AI 生成</span></h2>
+{% set ar = report.chapters.architecture.data if report.chapters.architecture else none %}
+{{ notfound(ar, '架构分析') }}
+{% if ar %}
+<p>{{ ar.overview or '' }}</p>
+{% if ar.architecture_diagram_mermaid %}<h3>架构图</h3><pre class="mermaid">{{ ar.architecture_diagram_mermaid }}</pre>{% endif %}
+<div class="grid2"><div>
+{% if ar.components %}<h3>核心组件</h3><table><tr><th>组件</th><th>职责</th><th>证据</th></tr>
+{% for c in ar.components %}<tr><td>{{ c.name }}</td><td>{{ c.responsibility }}</td><td class="evidence">{{ (c.evidence or [])|join(', ') }}</td></tr>{% endfor %}</table>{% endif %}
+</div><div>
+{% if ar.patterns %}<h3>设计模式与风格</h3><table><tr><th>模式</th><th>适配</th><th>评价</th></tr>
+{% for p in ar.patterns %}<tr><td>{{ p.name }}</td><td>{{ p.fit }}</td><td>{{ p.comment }}</td></tr>{% endfor %}</table>{% endif %}
+{% if ar.dependency_issues %}<h3>依赖问题</h3><ul class="tight">{% for d in ar.dependency_issues %}<li>{{ sev('high' if d.type=='circular' else 'medium') }} [{{ d.type }}] {{ d.detail }}</li>{% endfor %}</ul>{% endif %}
+</div></div>
+{% if ar.doc_assessment %}<h3>架构文档评估</h3><p>完整性：<b>{{ ar.doc_assessment.completeness }}</b>{% if ar.doc_assessment.files %}（发现：{{ ar.doc_assessment.files|join(', ') }}）{% endif %}</p>
+{% if ar.doc_assessment.issues %}<ul class="tight">{% for i in ar.doc_assessment.issues %}<li>{{ i }}</li>{% endfor %}</ul>{% endif %}{% endif %}
+{% if ar.issues %}<h3>架构问题与建议</h3><table><tr><th>严重度</th><th>问题</th><th>建议</th><th>证据</th></tr>
+{% for i in ar.issues %}<tr><td>{{ sev(i.severity) }}</td><td>{{ i.title }}<div class="evidence">{{ i.detail or '' }}</div></td><td>{{ i.suggestion or '' }}</td><td class="evidence">{{ (i.evidence or [])|join(', ') }}</td></tr>{% endfor %}</table>{% endif %}
+{% if ar.score is not none %}<p>架构评分：<b>{{ ar.score }}</b>/100 — {% for r in (ar.score_reasons or []) %}{{ r }}{% if not loop.last %}；{% endif %}{% endfor %}</p>{% endif %}
+{% endif %}
+</section>
+
+<section id="business">
+<h2>10. 业务知识还原与接手就绪度 <span class="badge sev-info">AI 生成</span></h2>
+{% set bk = report.chapters.business_knowledge.data if report.chapters.business_knowledge else none %}
+{{ notfound(bk, '业务知识还原') }}
+{% if bk %}
+<div class="notice"><b>定位（REQ §3.10）：</b>还原的目的不是彻底还原业务，而是评估「人类或 AI 工程师接手本项目继续开发时，应该知道的知识是否完整、准确、一致」。</div>
+{% set rd = bk.readiness or {} %}
+<div class="kpi">
+<div class="box"><b>{{ rd.completeness if rd.completeness is not none else '?' }}</b><span>完整性</span></div>
+<div class="box"><b>{{ rd.accuracy if rd.accuracy is not none else '?' }}</b><span>准确性</span></div>
+<div class="box"><b>{{ rd.consistency if rd.consistency is not none else '?' }}</b><span>一致性</span></div>
+<div class="box"><b>{{ bk.score if bk.score is not none else '?' }}</b><span>维度评分</span></div>
+</div>
+{% if rd.conclusion %}<blockquote>{{ rd.conclusion }}</blockquote>{% endif %}
+<h3>还原知识清单（{{ (bk.knowledge or [])|length }} 条，含置信度）</h3>
+{% if bk.knowledge %}<table><tr><th>类别</th><th>知识摘要</th><th>证据来源</th><th>置信度</th></tr>
+{% for k in bk.knowledge %}<tr><td>{{ k.category }}</td><td>{{ k.summary }}</td><td class="evidence">{{ (k.evidence or [])|join('; ') }}</td><td>{{ conf(k.confidence) }}</td></tr>{% endfor %}</table>{% endif %}
+<h3>知识缺口清单（{{ (bk.gaps or [])|length }} 条）</h3>
+{% if bk.gaps %}<table><tr><th>缺失知识</th><th>对接手的影响</th><th>补齐建议</th><th>建议载体</th></tr>
+{% for gp in bk.gaps %}<tr><td>{{ gp.topic }}</td><td>{{ gp.impact }}</td><td>{{ gp.suggestion }}</td><td>{{ gp.carrier or '—' }}</td></tr>{% endfor %}</table>
+{% else %}<p>未识别到明显知识缺口</p>{% endif %}
+<h3>一致性矛盾（{{ (bk.contradictions or [])|length }} 条）</h3>
+{% if bk.contradictions %}<table><tr><th>类型</th><th>严重度</th><th>描述</th><th>证据</th></tr>
+{% for c in bk.contradictions %}<tr><td>{{ c.type }}</td><td>{{ sev(c.severity) }}</td><td>{{ c.description }}</td><td class="evidence">{{ (c.evidence or [])|join('; ') }}</td></tr>{% endfor %}</table>
+{% else %}<p>未发现明显矛盾</p>{% endif %}
+{% endif %}
+</section>
+
+<section id="issues">
+<h2>11. 问题总清单（{{ issues|length }}）</h2>
+<div class="filters" id="pri-filters">
+<button data-pri="all" class="active">全部</button><button data-pri="P0">P0</button><button data-pri="P1">P1</button><button data-pri="P2">P2</button>
+</div>
+<table id="issues-table"><tr><th>优先级</th><th>维度</th><th>严重度</th><th>问题</th><th>来源</th></tr>
+{% for i in issues %}<tr data-pri="{{ i.priority }}"><td>{{ pri(i.priority) }}</td><td>{{ i.dimension }}</td><td>{{ sev(i.severity) }}</td><td>{{ i.title }}{% if i.detail %}<div class="evidence">{{ i.detail }}</div>{% endif %}{% if i.evidence %}<div class="evidence">{{ i.evidence|join('; ') }}</div>{% endif %}</td><td>{{ i.source or '-' }}</td></tr>{% endfor %}</table>
+</section>
+
+<section id="summary">
+<h2>12. 总结与建议</h2>
+{% if sm %}
+{% set rm2 = sm.roadmap or {} %}
+{% if rm2 %}<div class="grid2"><div><h3>短期（一周内）</h3><ul class="tight">{% for x in (rm2.short or []) %}<li>{{ x }}</li>{% endfor %}</ul></div>
+<div><h3>中期（一个月）</h3><ul class="tight">{% for x in (rm2.mid or []) %}<li>{{ x }}</li>{% endfor %}</ul></div></div>
+<h3>长期（季度级）</h3><ul class="tight">{% for x in (rm2.long or []) %}<li>{{ x }}</li>{% endfor %}</ul>{% endif %}
+{% if sm.future_suggestions %}<h3>未来发展方向</h3><ul class="tight">{% for x in sm.future_suggestions %}<li>{{ x }}</li>{% endfor %}</ul>{% endif %}
+{% else %}<div class="missing">⚠️ 总结缺失（ai.summary 未完成）</div>{% endif %}
+</section>
+
+<section id="appendix">
+<h2>附录：子任务执行状态</h2>
+<table><tr><th>子任务</th><th>类型</th><th>状态</th><th>尝试</th><th>耗时</th><th>备注</th></tr>
+{% for name, s in (report.subtasks_status or {}).items() %}<tr><td><code>{{ name }}</code></td><td>{{ s.type }}</td><td>{{ s.status }}</td><td class="num">{{ s.attempts }}</td><td class="num">{{ s.duration_seconds or '-' }}{% if s.duration_seconds %}s{% endif %}</td><td class="evidence">{{ s.error or s.skip_reason or '' }}</td></tr>{% endfor %}</table>
+<div class="footer">本报告由 org-repo-util/analysis 生成 · 纯静态分析 · 数据内嵌于本文件（#report-data）可机器解析</div>
+</section>
+
+</main>
+</div>
+
+{% if echarts_js %}<script>{{ echarts_js|safe }}</script>
+{% else %}<script src="{{ echarts_js_cdn }}"></script>{% endif %}
+{% if mermaid_js %}<script>{{ mermaid_js|safe }}</script>
+{% else %}<script src="{{ mermaid_js_cdn }}"></script>{% endif %}
+<script type="application/json" id="report-data">{{ data_json|safe }}</script>
+<script>
+(function(){
+  const DATA = JSON.parse(document.getElementById('report-data').textContent);
+  if (window.mermaid) { mermaid.initialize({startOnLoad:true, securityLevel:'loose', theme:'neutral'}); }
+  const scores = (DATA.scores||{}).dimensions||{};
+  const dims = Object.keys(scores).filter(d=>scores[d] && typeof scores[d]==='object');
+  if (window.echarts && dims.length) {
+    const el = document.getElementById('chart-scores');
+    if (el) {
+      const rev = dims.slice().reverse();
+      const chart = echarts.init(el, null, {renderer:'svg'});
+      chart.setOption({
+        grid:{left:150,right:50,top:10,bottom:25},
+        xAxis:{type:'value',max:100},
+        yAxis:{type:'category',data:rev,axisLabel:{fontSize:11}},
+        tooltip:{trigger:'item',formatter:p=>{const d=scores[p.name]||{};return p.name+'<br>得分: '+(d.score==null?'缺失':d.score)+'<br>权重: '+d.weight+'%<br>来源: '+(d.source==='ai'?'AI 评分':(d.source==='rule'?'规则评分':'数据缺失'));}},
+        series:[{type:'bar',data:rev.map(d=>({value:(scores[d].score==null?0:scores[d].score),itemStyle:{color:scores[d].score==null?'#cbd5e1':(scores[d].score>=75?'#16a34a':scores[d].score>=60?'#d97706':'#dc2626')}})),label:{show:true,position:'right',formatter:p=>{const d=scores[rev[p.dataIndex]];return d.score==null?'缺失':d.score;}}}]
+      });
+    }
+  }
+  const st = ((DATA.chapters||{}).structure||{}).data;
+  if (window.echarts && st && st.languages) {
+    const el = document.getElementById('chart-langs');
+    if (el) {
+      const chart = echarts.init(el, null, {renderer:'svg'});
+      chart.setOption({
+        tooltip:{trigger:'item',formatter:'{b}: {c} 行 ({d}%)'},
+        series:[{type:'pie',radius:['35%','70%'],data:Object.entries(st.languages).slice(0,12).map(([k,v])=>({name:k,value:v.lines})),label:{fontSize:11}}]
+      });
+    }
+  }
+  const dp = ((DATA.chapters||{}).dependencies||{}).data;
+  const g = dp && dp.dependency_graph;
+  if (window.echarts && g && g.nodes) {
+    const el = document.getElementById('chart-deps');
+    if (el) {
+      const chart = echarts.init(el, null, {renderer:'svg'});
+      chart.setOption({
+        tooltip:{},
+        series:[{type:'graph',layout:'force',roam:true,draggable:true,
+          data:g.nodes.map(n=>({name:n.id,symbolSize:14})),
+          edges:(g.edges||[]).map(e=>({source:e.source,target:e.target})),
+          force:{repulsion:220,edgeLength:60},
+          label:{show:g.nodes.length<=60,fontSize:9,position:'right'},
+          lineStyle:{color:'#94a3b8',curveness:0.1}}]
+      });
+    }
+  }
+  document.querySelectorAll('#pri-filters button').forEach(btn=>{
+    btn.addEventListener('click',()=>{
+      document.querySelectorAll('#pri-filters button').forEach(b=>b.classList.remove('active'));
+      btn.classList.add('active');
+      const pri = btn.dataset.pri;
+      document.querySelectorAll('#issues-table tr[data-pri]').forEach(tr=>{
+        tr.style.display = (pri==='all'||tr.dataset.pri===pri)?'':'none';
+      });
+    });
+  });
+})();
+</script>
+</body>
+</html>

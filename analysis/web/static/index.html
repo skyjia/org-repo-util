@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>仓库全面分析 · 控制台</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>📊 仓库全面分析</h1>
+  <span id="daemon-status" class="daemon">daemon: 检测中…</span>
+</header>
+
+<!-- 视图 1：任务列表 -->
+<div id="view-list" class="view">
+  <section class="card">
+    <h2>发起分析</h2>
+    <form id="start-form">
+      <input name="target" placeholder="目标仓库 <org>/<repo>，如 augmn/be-promotion-center" required>
+      <input name="ref" placeholder="branch / tag / commit（可选，默认当前 HEAD）">
+      <label class="chk"><input type="checkbox" name="mock"> mock 联调模式</label>
+      <button type="submit">🚀 发起</button>
+    </form>
+    <div id="start-msg"></div>
+  </section>
+  <section class="card">
+    <h2>任务</h2>
+    <table id="tasks-table">
+      <thead><tr><th>任务 ID</th><th>仓库</th><th>状态</th><th>进度</th><th>创建时间</th><th>耗时</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <p id="tasks-empty" class="empty hidden">暂无任务 —— 在上方发起第一个分析</p>
+  </section>
+</div>
+
+<!-- 视图 2：任务详情 -->
+<div id="view-detail" class="view hidden">
+  <div class="detail-head">
+    <button id="back-btn">← 返回列表</button>
+    <h2 id="detail-title"></h2>
+    <span id="detail-actions"></span>
+  </div>
+  <div id="task-meta" class="meta-line"></div>
+
+  <section class="card">
+    <h2>工作流（子任务流水线）</h2>
+    <div id="workflow"></div>
+    <div id="subtask-detail"></div>
+  </section>
+
+  <div class="cols2">
+    <section class="card">
+      <h2>执行节奏（实时事件流）</h2>
+      <div id="events" class="events-box"></div>
+    </section>
+    <section class="card">
+      <h2>增量报告预览 <small>（完成一部分即可见；自动刷新）</small></h2>
+      <div id="preview"></div>
+    </section>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

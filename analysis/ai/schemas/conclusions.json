@@ -1,0 +1,28 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ai.conclusions output",
+  "type": "object",
+  "required": ["dimensions"],
+  "properties": {
+    "dimensions": {
+      "type": "object",
+      "required": ["structure", "dependencies", "quality", "security", "performance", "docs", "tests"],
+      "additionalProperties": false,
+      "patternProperties": {
+        "^(structure|dependencies|quality|security|performance|docs|tests)$": {
+          "type": "object",
+          "required": ["summary", "findings", "suggestions"],
+          "properties": {
+            "summary": {"type": "string", "minLength": 10},
+            "findings": {
+              "type": "array",
+              "items": {"type": "object", "required": ["severity", "title"],
+                        "properties": {"severity": {"enum": ["high", "medium", "low"]}, "title": {"type": "string"}, "detail": {"type": "string"}, "evidence": {"type": "array"}}}
+            },
+            "suggestions": {"type": "array", "items": {"type": "string"}}
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ai.summary output",
+  "type": "object",
+  "required": ["executive_summary", "top_issues", "roadmap"],
+  "properties": {
+    "executive_summary": {"type": "string", "minLength": 50},
+    "top_issues": {
+      "type": "array", "minItems": 1,
+      "items": {"type": "object", "required": ["priority", "title"],
+                "properties": {"priority": {"enum": ["P0", "P1", "P2"]}, "dimension": {"type": "string"}, "title": {"type": "string"}, "detail": {"type": "string"}, "evidence": {"type": "array"}}}
+    },
+    "roadmap": {
+      "type": "object", "required": ["short", "mid", "long"],
+      "properties": {
+        "short": {"type": "array", "items": {"type": "string"}},
+        "mid": {"type": "array", "items": {"type": "string"}},
+        "long": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "future_suggestions": {"type": "array", "items": {"type": "string"}}
+  }
+}

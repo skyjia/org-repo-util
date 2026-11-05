@@ -1,0 +1,282 @@
+#!/usr/bin/env python3
+"""
+仓库全面分析工具 - CLI 入口（对应 ANALYSIS-DESIGN.md §8）
+
+使用 Click 框架构建命令行接口（参照 audit/bin/audit 模式）
+"""
+
+import sys
+import os
+
+# 添加项目根目录到 Python 路径
+# analysis/bin/analyze -> analysis -> org-repo-util
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, project_root)
+
+import subprocess
+from pathlib import Path
+from typing import Optional
+
+import click
+
+from analysis.core import config
+from analysis.core import daemon as daemon_mod
+from analysis.core import service
+from analysis.core.models import TaskStatus
+from analysis.core.store import TaskNotFoundError, TaskStore
+
+
+def _register_handlers() -> None:
+    """import 触发全部子任务 handler 注册（collectors / AI / scoring / archive）"""
+    import analysis.collectors  # noqa: F401
+    import analysis.ai  # noqa: F401
+    import analysis.reporters  # noqa: F401
+    from analysis.core.scoring import register_scoring_handler
+    register_scoring_handler()
+
+
+STATUS_ICONS = {
+    "queued": "⏳", "running": "🔄", "completed": "✅",
+    "failed": "❌", "skipped": "⚠️", "canceled": "🚫",
+}
+
+
+@click.group()
+@click.version_option(version="0.1.0", prog_name="analyze")
+@click.option("--verbose", "-v", is_flag=True, help="详细输出")
+@click.pass_context
+def cli(ctx, verbose: bool):
+    """仓库全面分析工具 - 静态分析 + AI 解读（REPO-ANALYSIS-REQ）"""
+    ctx.ensure_object(dict)
+    ctx.obj["verbose"] = verbose
+    config.ensure_dirs()
+    ctx.obj["store"] = TaskStore()
+    _register_handlers()
+
+
+@cli.command()
+@click.argument("target")
+@click.option("--ref", "-r", help="指定 branch/tag/commit（默认当前 HEAD）")
+@click.option("--mock", is_flag=True, help="联调模式：以模拟执行代替未实现的 handler")
+@click.pass_context
+def start(ctx, target: str, ref: Optional[str], mock: bool):
+    """发起分析：<org>/<repo>，立即返回（后台异步执行）"""
+    store: TaskStore = ctx.obj["store"]
+    try:
+        task = service.create_analysis_task(target, ref, mock, store=store)
+        daemon_mod.ensure_daemon(store, ctx.obj["verbose"])
+    except service.ServiceError as e:
+        raise click.ClickException(str(e))
+    except RuntimeError as e:
+        raise click.ClickException(str(e))
+
+    click.echo(f"📋 任务已创建: {task.task_id}")
+    click.echo(f"   目标: {task.org}/{task.repo} @ {task.commit_sha[:12]}"
+               + (f"（ref={ref}）" if ref else ""))
+    if mock:
+        click.echo("   ⚠️ mock 模式：子任务为模拟执行")
+    click.echo(f"\n   查看进度: analyze status {task.task_id}")
+    click.echo(f"   可视化:   analyze ui")
+
+
+@cli.command()
+@click.argument("task_id", required=False)
+@click.pass_context
+def status(ctx, task_id: Optional[str]):
+    """查看任务进度（无参 = 最近任务）"""
+    from rich.console import Console
+    from rich.table import Table
+    from rich import box
+
+    from analysis.core.registry import SUBTASK_SPECS
+
+    store: TaskStore = ctx.obj["store"]
+    try:
+        task = store.find_task(task_id) if task_id else store.latest_task()
+    except TaskNotFoundError as e:
+        raise click.ClickException(str(e))
+    if task is None:
+        raise click.ClickException("暂无任务（用 analyze start 发起）")
+
+    console = Console()
+    icon = STATUS_ICONS.get(task.status.value, "")
+    console.print(f"\n[bold]{task.task_id}[/bold]  {icon} {task.status.value}")
+    console.print(f"  仓库: {task.org}/{task.repo}  基线: {(task.commit_sha or '?')[:12]}"
+                  + (f"  ref: {task.ref}" if task.ref else ""))
+    p = task.progress
+    console.print(f"  进度: {p['completed']}/{p['total']} 完成"
+                  + (f"，{p['failed']} 失败" if p['failed'] else "")
+                  + (f"，{p['skipped']} 跳过" if p['skipped'] else "")
+                  + (f"  总耗时: {task.duration_seconds}s" if task.duration_seconds else ""))
+    if task.error:
+        console.print(f"  [yellow]备注: {task.error}[/yellow]")
+
+    table = Table(box=box.SIMPLE, show_header=True, header_style="dim")
+    for col in ("子任务", "类型", "状态", "耗时", "尝试", "备注"):
+        table.add_column(col)
+    for spec in SUBTASK_SPECS:
+        st = task.subtasks.get(spec.name)
+        if not st:
+            continue
+        note = st.error or st.skip_reason or ""
+        table.add_row(
+            spec.name, spec.type,
+            f"{STATUS_ICONS.get(st.status.value, '')} {st.status.value}",
+            f"{st.duration_seconds}s" if st.duration_seconds is not None else "-",
+            str(st.attempts), note[:60])
+    console.print(table)
+
+    if task.report.get("html"):
+        console.print(f"  📄 报告: {task.report['html']}")
+
+
+@cli.command()
+@click.option("--limit", "-n", default=20)
+@click.pass_context
+def history(ctx, limit: int):
+    """历史任务列表"""
+    from rich.console import Console
+    from rich.table import Table
+    from rich import box
+
+    store: TaskStore = ctx.obj["store"]
+    tasks = store.list_tasks()[-limit:]
+    if not tasks:
+        click.echo("📭 暂无任务")
+        return
+
+    console = Console()
+    table = Table(title=f"分析任务（最近 {len(tasks)} 条）", box=box.ROUNDED)
+    for col, style in (("任务 ID", "cyan"), ("仓库", "magenta"), ("状态", ""),
+                       ("进度", "green"), ("创建时间", "dim"), ("耗时", "dim")):
+        table.add_column(col, style=style or None)
+    for t in reversed(tasks):
+        p = t.progress
+        table.add_row(
+            t.task_id, f"{t.org}/{t.repo}",
+            f"{STATUS_ICONS.get(t.status.value, '')} {t.status.value}",
+            f"{p['completed']}/{p['total']}",
+            t.created_at.replace("T", " "),
+            f"{t.duration_seconds}s" if t.duration_seconds else "-")
+    console.print(table)
+
+
+@cli.command()
+@click.argument("task_id")
+@click.pass_context
+def cancel(ctx, task_id: str):
+    """取消任务（排队中直接取消；执行中在子任务边界停止）"""
+    try:
+        task = service.set_cancel(ctx.obj["store"], task_id)
+    except (TaskNotFoundError, service.ServiceError) as e:
+        raise click.ClickException(str(e))
+    click.echo(f"🚫 已请求取消: {task.task_id}（当前状态 {task.status.value}）")
+
+
+@cli.command()
+@click.argument("task_id")
+@click.option("--subtask", "-s", help="仅重试指定子任务（默认重试全部 failed/skipped）")
+@click.pass_context
+def retry(ctx, task_id: str, subtask: Optional[str]):
+    """重试失败/跳过的子任务，任务重新入队（已完成子任务不重复执行）"""
+    try:
+        task = service.set_retry(ctx.obj["store"], task_id, subtask)
+    except (TaskNotFoundError, service.ServiceError) as e:
+        raise click.ClickException(str(e))
+    click.echo(f"♻️ 已重新入队: {task.task_id}")
+
+
+@cli.command()
+@click.argument("task_id")
+@click.option("--open", "open_it", is_flag=True, help="在浏览器中打开 HTML 报告")
+@click.pass_context
+def report(ctx, task_id: str, open_it: bool):
+    """查看归档报告路径"""
+    try:
+        task = ctx.obj["store"].find_task(task_id)
+    except TaskNotFoundError as e:
+        raise click.ClickException(str(e))
+    html, js = task.report.get("html"), task.report.get("json")
+    if not html and not js:
+        raise click.ClickException("该任务尚无归档报告（可能未完成）")
+    click.echo(f"HTML: {html or '-'}")
+    click.echo(f"JSON: {js or '-'}")
+    if open_it and html and Path(html).exists():
+        subprocess.run(["open", str(html)])
+
+
+@cli.command()
+@click.option("--port", "-p", default=config.WEB_PORT, type=int)
+@click.option("--no-browser", is_flag=True, help="不自动打开浏览器")
+@click.pass_context
+def ui(ctx, port: int, no_browser: bool):
+    """启动 Web 可视化界面（按需启动、用完即退，ctrl-c 退出；不影响后台分析）"""
+    from analysis.web.app import run_web
+    run_web(port=port, open_browser=not no_browser)
+
+
+@cli.command()
+def doctor():
+    """环境自检"""
+    import shutil
+
+    click.echo("🩺 环境自检:")
+    checks = []
+
+    for tool in ("git", "gh", "claude"):
+        if shutil.which(tool):
+            try:
+                ver = subprocess.run([tool, "--version"], capture_output=True, text=True,
+                                     timeout=15).stdout.splitlines()
+                ver_s = ver[0][:60] if ver else "ok"
+            except Exception:
+                ver_s = "ok"
+            checks.append((tool, True, ver_s))
+        else:
+            checks.append((tool, False, "未安装"))
+
+    for mod in ("click", "rich", "jinja2", "jsonschema", "requests", "yaml",
+                "fastapi", "uvicorn", "lizard"):
+        try:
+            __import__(mod)
+            checks.append((f"python:{mod}", True, ""))
+        except ImportError:
+            checks.append((f"python:{mod}", False, "未安装（运行 analysis/setup.sh）"))
+
+    store = TaskStore()
+    alive = store.is_daemon_alive()
+    checks.append(("daemon", True,
+                   f"运行中 (pid={store.read_pid()})" if alive else "未运行（start 时自动拉起）"))
+
+    vendor = config.WEB_STATIC_DIR / "vendor"
+    for f in ("echarts.min.js", "mermaid.min.js"):
+        checks.append((f"vendor:{f}", (vendor / f).exists(),
+                       "" if (vendor / f).exists() else "缺失（归档报告将回退 CDN，非自包含）"))
+
+    ok = 0
+    for name, passed, note in checks:
+        if passed:
+            ok += 1
+        click.echo(f"  {'✅' if passed else '❌'} {name}" + (f" — {note}" if note else ""))
+
+    if any(c[0] == "gh" and c[1] for c in checks):
+        auth = subprocess.run(["gh", "auth", "status"], capture_output=True, text=True, timeout=15)
+        click.echo(f"  {'✅' if auth.returncode == 0 else '⚠️'} gh 认证"
+                   + ("" if auth.returncode == 0 else " — 未登录（overview 将降级为纯 git）"))
+
+    click.echo(f"\n{ok}/{len(checks)} 项通过")
+
+
+@cli.command("_daemon", hidden=True)
+def _daemon():
+    """内部命令：daemon 主循环（由 start/retry 自动拉起）"""
+    config.ensure_dirs()
+    daemon_mod.daemon_loop(TaskStore())
+
+
+def main():
+    cli()
+
+
+if __name__ == "__main__":
+    main()

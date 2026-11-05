@@ -1,0 +1,43 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ai.business_knowledge output",
+  "type": "object",
+  "required": ["knowledge", "gaps", "contradictions", "readiness", "score", "score_reasons"],
+  "properties": {
+    "knowledge": {
+      "type": "array", "minItems": 5,
+      "items": {
+        "type": "object",
+        "required": ["category", "summary", "evidence", "confidence"],
+        "properties": {
+          "category": {"enum": ["业务领域概念", "业务规则", "设计意图", "技术决策背景", "外部系统集成关系", "运维部署知识"]},
+          "summary": {"type": "string", "minLength": 10},
+          "evidence": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+          "confidence": {"type": "number", "minimum": 0, "maximum": 100}
+        }
+      }
+    },
+    "gaps": {
+      "type": "array",
+      "items": {"type": "object", "required": ["topic", "impact", "suggestion"],
+                "properties": {"topic": {"type": "string"}, "impact": {"type": "string"}, "suggestion": {"type": "string"}, "carrier": {"type": "string"}}}
+    },
+    "contradictions": {
+      "type": "array",
+      "items": {"type": "object", "required": ["type", "description"],
+                "properties": {"type": {"enum": ["doc_vs_code", "comment_vs_impl", "naming_vs_logic"]}, "description": {"type": "string"}, "evidence": {"type": "array"}, "severity": {"enum": ["high", "medium", "low"]}}}
+    },
+    "readiness": {
+      "type": "object",
+      "required": ["completeness", "accuracy", "consistency", "conclusion"],
+      "properties": {
+        "completeness": {"type": "number", "minimum": 0, "maximum": 100},
+        "accuracy": {"type": "number", "minimum": 0, "maximum": 100},
+        "consistency": {"type": "number", "minimum": 0, "maximum": 100},
+        "conclusion": {"type": "string", "minLength": 20}
+      }
+    },
+    "score": {"type": "number", "minimum": 0, "maximum": 100},
+    "score_reasons": {"type": "array", "minItems": 1, "items": {"type": "string"}}
+  }
+}
