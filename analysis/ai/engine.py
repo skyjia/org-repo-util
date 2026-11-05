@@ -19,8 +19,12 @@ class AIEngineError(Exception):
     pass
 
 
+# 第三方 provider 场景下 headless 模式的无害警告（stderr 噪音，过滤后不入错误信息）
+_NOISE_PREFIXES = ("[claude-code:unrecognized_model]",)
+
+
 class AIEngine:
-    def __init__(self, allowed_tools: str = "Read,Grep,Glob", max_turns: int = 60):
+    def __init__(self, allowed_tools: str = "Read,Grep,Glob", max_turns: int = 120):
         self.allowed_tools = allowed_tools
         self.max_turns = max_turns
 
@@ -52,15 +56,40 @@ class AIEngine:
 
         if proc.returncode != 0:
             raise AIEngineError(
-                f"claude 退出码 {proc.returncode}: {(proc.stderr or proc.stdout)[:400]}")
+                f"claude 退出码 {proc.returncode}: {self._failure_detail(proc)}")
 
         envelope = self._parse_envelope(proc.stdout)
         if envelope.get("is_error"):
-            raise AIEngineError(f"claude 返回错误: {str(envelope.get('result'))[:400]}")
+            raise AIEngineError(
+                f"claude 返回错误 (stop_reason={envelope.get('stop_reason')}, "
+                f"turns={envelope.get('num_turns')}): {str(envelope.get('result'))[:400]}")
         text = envelope.get("result") or ""
         if not text.strip():
-            raise AIEngineError("claude 返回空结果")
+            raise AIEngineError(
+                f"claude 返回空结果 (stop_reason={envelope.get('stop_reason')}, "
+                f"turns={envelope.get('num_turns')})")
         return extract_json(text)
+
+    @staticmethod
+    def _failure_detail(proc: subprocess.CompletedProcess) -> str:
+        """失败取证：stdout envelope 解析（stop_reason/num_turns/result）+ 过滤噪音后的 stderr 尾部"""
+        parts = []
+        try:
+            env = json.loads(proc.stdout)
+            sr = env.get("stop_reason")
+            parts.append(f"stop_reason={sr}, turns={env.get('num_turns')}")
+            if sr == "max_turns":
+                parts.append("已达 max-turns 上限（任务过重，考虑精简输入或调大 --max-turns）")
+            if env.get("result"):
+                parts.append(f"result: {str(env['result'])[:300]}")
+        except (json.JSONDecodeError, TypeError):
+            if proc.stdout and proc.stdout.strip():
+                parts.append(f"stdout 尾部: {proc.stdout.strip()[-200:]}")
+        err_lines = [l for l in (proc.stderr or "").splitlines()
+                     if l.strip() and not l.startswith(_NOISE_PREFIXES)]
+        if err_lines:
+            parts.append("stderr: " + " | ".join(err_lines[-3:])[:400])
+        return "; ".join(parts) or "(无错误输出)"
 
     @staticmethod
     def _parse_envelope(stdout: str) -> dict:
