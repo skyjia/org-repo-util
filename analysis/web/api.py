@@ -27,7 +27,9 @@ class RetryBody(BaseModel):
 
 @router.get("/api/health")
 def health():
-    return {"ok": True, "daemon_alive": _store.is_daemon_alive(),
+    from analysis import __version__
+    return {"ok": True, "version": __version__,
+            "daemon_alive": _store.is_daemon_alive(),
             "daemon_pid": _store.read_pid()}
 
 

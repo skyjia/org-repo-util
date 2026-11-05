@@ -42,7 +42,7 @@ STATUS_ICONS = {
 
 
 @click.group()
-@click.version_option(version="0.1.0", prog_name="analyze")
+@click.version_option(version="0.2.0", prog_name="analyze")
 @click.option("--verbose", "-v", is_flag=True, help="详细输出")
 @click.pass_context
 def cli(ctx, verbose: bool):
@@ -245,7 +245,10 @@ def ui(ctx, port: int, no_browser: bool):
     if n:
         click.echo(f"♻️ 已自动恢复 {n} 个中断任务")
     from analysis.web.app import run_web
-    run_web(port=port, open_browser=not no_browser)
+    try:
+        run_web(port=port, open_browser=not no_browser)
+    except RuntimeError as e:      # 端口被旧 Web 进程占用等
+        raise click.ClickException(str(e))
 
 
 @cli.command()

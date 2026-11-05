@@ -24,14 +24,29 @@ def create_app() -> FastAPI:
     return app
 
 
+def _port_busy(port: int) -> bool:
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.5)
+        return s.connect_ex((config.WEB_HOST, port)) == 0
+
+
 def run_web(port: int = config.WEB_PORT, open_browser: bool = True) -> None:
     import threading
     import webbrowser
 
     import uvicorn
 
+    from analysis import __version__
+    if _port_busy(port):
+        raise RuntimeError(
+            f"端口 {port} 已被占用——可能有旧 Web 服务进程在运行。"
+            f"后端代码不热更新：请先结束旧进程（pkill -f 'analyze ui'）再启动，"
+            f"或用 --port 换端口。当前代码版本 v{__version__}")
+
     if open_browser:
         threading.Timer(1.2, lambda: webbrowser.open(f"http://{config.WEB_HOST}:{port}")).start()
 
-    print(f"🌐 Web 界面: http://{config.WEB_HOST}:{port}（ctrl-c 退出；退出不影响后台分析任务）")
+    print(f"🌐 Web 界面 v{__version__}: http://{config.WEB_HOST}:{port}"
+          f"（ctrl-c 退出；退出不影响后台分析任务）")
     uvicorn.run(create_app(), host=config.WEB_HOST, port=port, log_level="warning")

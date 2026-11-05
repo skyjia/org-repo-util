@@ -43,9 +43,23 @@ async function refreshHealth() {
   try {
     const h = await api("/api/health");
     const el = $("#daemon-status");
-    el.textContent = h.daemon_alive ? `daemon: 运行中 (pid=${h.daemon_pid})` : "daemon: 未运行（发起任务时自动拉起）";
+    const ver = h.version ? `v${h.version} · ` : "";
+    el.textContent = ver + (h.daemon_alive ? `daemon: 运行中 (pid=${h.daemon_pid})` : "daemon: 未运行（发起任务时自动拉起）");
     el.className = "daemon " + (h.daemon_alive ? "alive" : "dead");
   } catch (_) {}
+}
+
+function showBanner(text, kind) {
+  let b = $("#banner");
+  if (!b) {
+    b = document.createElement("div");
+    b.id = "banner";
+    document.body.prepend(b);
+  }
+  b.textContent = text;
+  b.className = "banner " + (kind || "ok");
+  clearTimeout(b._t);
+  b._t = setTimeout(() => b.remove(), 8000);
 }
 
 /* ---------- 列表视图 ---------- */
@@ -128,7 +142,7 @@ function renderActions(t) {
   const el = $("#detail-actions");
   let html = "";
   if (["queued", "running"].includes(t.status))
-    html += `<button class="danger" onclick="cancelTask()">取消</button> `;
+    html += `<button class="danger" onclick="cancelTask(event)">取消</button> `;
   if (["completed", "failed", "canceled"].includes(t.status))
     html += `<button onclick="retryTask()">♻️ 重试失败项</button> `;
   if (t.report && t.report.html) {
@@ -234,10 +248,29 @@ $("#start-form").addEventListener("submit", async (e) => {
   }
 });
 
-window.cancelTask = async function () {
-  if (!confirm("确认取消当前任务？")) return;
-  try { await api(`/api/tasks/${state.taskId}/cancel`, { method: "POST" }); refreshDetail(); }
-  catch (e) { alert(e.message); }
+// 取消：双击内联确认（不用 confirm()——可能被浏览器静默拦截，导致「点了没反应」）
+let cancelArmed = false;
+window.cancelTask = async function (ev) {
+  const btn = ev && ev.target;
+  if (!cancelArmed) {
+    cancelArmed = true;
+    if (btn) { btn.textContent = "再点一次确认取消"; btn.classList.add("armed"); }
+    setTimeout(() => {
+      cancelArmed = false;
+      if (btn) { btn.textContent = "取消"; btn.classList.remove("armed"); }
+    }, 4000);
+    return;
+  }
+  cancelArmed = false;
+  if (btn) { btn.disabled = true; btn.textContent = "取消中…"; }
+  try {
+    await api(`/api/tasks/${state.taskId}/cancel`, { method: "POST" });
+    showBanner("✅ 已请求取消：在子任务边界生效（AI 子任务执行中时最长需等其完成；可用 CLI cancel 后 kill headless claude 立即中断）", "ok");
+    refreshDetail();
+  } catch (e) {
+    showBanner("❌ 取消失败: " + e.message, "err");
+    if (btn) { btn.disabled = false; btn.textContent = "取消"; }
+  }
 };
 
 window.retryTask = async function () {
@@ -245,12 +278,13 @@ window.retryTask = async function () {
     await api(`/api/tasks/${state.taskId}/retry`, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
     });
+    showBanner("♻️ 已重新入队（已完成子任务不重复执行）", "ok");
     refreshHealth();
     connectSSE(state.taskId);
     clearInterval(state.previewTimer);
     state.previewTimer = setInterval(refreshDetail, 3000);
     refreshDetail();
-  } catch (e) { alert(e.message); }
+  } catch (e) { showBanner("❌ 重试失败: " + e.message, "err"); }
 };
 
 $("#back-btn").addEventListener("click", backToList);
