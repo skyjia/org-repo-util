@@ -120,10 +120,16 @@ def aggregate_issues(outputs: dict[str, Optional[dict]]) -> list[dict]:
             f"[{c.get('type')}] {c.get('description', '')[:80]}",
             c.get("description"), c.get("evidence"), source="ai.business_knowledge")
 
-    # 去重（同 dimension+title）
+    # 去重：同维度下标题归一化（不同 AI 子任务常以相似标题报告同一问题）
+    import re as _re
+
+    def _norm(title: str) -> str:
+        t = _re.sub(r"[\s，。：:；;、,.\[\]（）()「」\-—/]+", "", str(title).lower())
+        return t[:12]          # 前 12 字符指纹（相似标题在前缀处分歧小；宁并勿漏）
+
     seen, unique = set(), []
     for it in issues:
-        key = (it["dimension"], it["title"])
+        key = (it["dimension"], _norm(it["title"]))
         if key not in seen:
             seen.add(key)
             unique.append(it)
