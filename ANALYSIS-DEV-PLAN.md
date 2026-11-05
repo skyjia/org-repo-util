@@ -73,24 +73,21 @@
 - [x] **T503** 归档路径与 latest — `reports/<org>/<repo>/analysis/<ts>.{html,json}` + latest 符号链接；修复 task.report 被 orchestrator 覆盖 bug（handler 改 ctx.task 统一落盘）
   - 结果：与 audit 时间戳目录并存互不干扰
 
-## 阶段 M5.5：中断恢复与韧性（新增，2026-11-05 需求补充）
+## 阶段 M5.5：中断恢复与韧性 ✅（2026-11-05，需求补充 v6）
 
 > 需求背景：网络不稳定、宿主机合盖休眠/重启导致执行中断，需自动恢复。
 
-- [ ] **T551** daemon 心跳与防双开
-  - 依赖：T104
-  - 内容：daemon 主循环每 10s 写 `state/daemon.heartbeat`（pid/ts/当前任务）；flock 独占锁防双 daemon
-  - 验收：双 daemon 并发拉起时后者自动退出；心跳文件随循环更新
+- [x] **T551** daemon 心跳与防双开
+  - 完成：2026-11-05。主循环每 10s 原子写 `state/daemon.heartbeat`（pid/ts/current_task）；flock 独占 `state/daemon.lock` 防双 daemon
+  - 结果：单测验证锁独占（第二个 daemon 拒绝启动）与心跳读写
 
-- [ ] **T552** 孤儿任务自动续跑
-  - 依赖：T551
-  - 内容：daemon 启动时扫描 running 孤儿任务 → 中断子任务重置（queued/attempts=0）→ 任务自动重新入队（**不再标记 failed 等人工 retry**）；保留用户 cancel 意图；写「中断恢复」事件
-  - 验收：模拟孤儿任务（手改 running + kill daemon）→ 重启后自动续跑且 completed 子任务不重复执行
+- [x] **T552** 孤儿任务自动续跑
+  - 完成：2026-11-05。`recover_interrupted_tasks`：running 孤儿 → 中断子任务重置（queued/attempts=0）→ 任务自动重新入队；保留 cancel 意图；写「中断恢复」事件
+  - 结果：**真实演练通过**——mock 任务执行中 `kill -9` daemon → `resume` 自动恢复 → 15/15 completed，归档正常；单测覆盖恢复/取消意图保留/无孤儿三态
 
-- [ ] **T553** 重试退避与 resume 命令
-  - 依赖：T103
-  - 内容：子任务失败重试前退避等待（det 5s / AI 30s，可配置），退避期间响应取消；`analyze resume` 命令（扫描恢复 + 拉起 daemon）；`ui` 命令自动触发恢复检查
-  - 验收：单测覆盖退避与恢复；resume 对正常/孤儿/无任务三态输出正确
+- [x] **T553** 重试退避与 resume 命令
+  - 完成：2026-11-05。失败重试前退避（det 5s / AI 30s，config 可调），退避每秒检查取消；`analyze resume` 命令；`ui` 启动时自动 `recover_and_ensure`
+  - 结果：27/27 单测通过（测试中退避置零）
 
 ## 阶段 M6：集成验证与收尾
 

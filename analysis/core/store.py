@@ -166,6 +166,50 @@ class TaskStore:
                 return
             time.sleep(poll_interval)
 
+    # ---------- daemon 心跳与锁（中断恢复，REQ v6） ----------
+    @property
+    def heartbeat_file(self) -> Path:
+        return self.state_dir / "daemon.heartbeat"
+
+    @property
+    def lock_file(self) -> Path:
+        return self.state_dir / "daemon.lock"
+
+    def write_heartbeat(self, current_task: Optional[str] = None) -> None:
+        import time
+        self.heartbeat_file.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"pid": os.getpid(), "ts": time.time(), "current_task": current_task}
+        fd, tmp = tempfile.mkstemp(dir=str(self.heartbeat_file.parent), suffix=".hb.tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(payload, f)
+            os.replace(tmp, self.heartbeat_file)
+        except BaseException:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+            raise
+
+    def read_heartbeat(self) -> Optional[dict]:
+        try:
+            return json.loads(self.heartbeat_file.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError):
+            return None
+
+    def acquire_daemon_lock(self) -> bool:
+        """flock 独占锁防双 daemon（决策 D2/DESIGN §4）；锁随进程退出自动释放"""
+        import fcntl
+        self.lock_file.parent.mkdir(parents=True, exist_ok=True)
+        fh = open(self.lock_file, "w")
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            fh.close()
+            return False
+        self._lock_fh = fh          # 持有句柄至进程退出
+        fh.write(str(os.getpid()))
+        fh.flush()
+        return True
+
     # ---------- daemon pid ----------
     @property
     def pid_file(self) -> Path:

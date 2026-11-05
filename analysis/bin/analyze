@@ -206,11 +206,42 @@ def report(ctx, task_id: str, open_it: bool):
 
 
 @cli.command()
+@click.pass_context
+def resume(ctx):
+    """检查并恢复中断任务（休眠/重启/网络中断后自动续跑，REQ v6）"""
+    store: TaskStore = ctx.obj["store"]
+    if store.is_daemon_alive():
+        hb = store.read_heartbeat()
+        hb_s = ""
+        if hb and hb.get("ts"):
+            import time
+            hb_s = f"，心跳 {int(time.time() - hb['ts'])}s 前"
+            if hb.get("current_task"):
+                hb_s += f"，正在执行 {hb['current_task']}"
+        click.echo(f"✅ daemon 运行中 (pid={store.read_pid()}{hb_s})，无中断任务需要恢复")
+        return
+
+    n = daemon_mod.recover_interrupted_tasks(store)
+    queued = store.queued_tasks()
+    if n:
+        click.echo(f"♻️ 已恢复 {n} 个中断任务（自动重新入队，已完成子任务不重复执行）")
+    if queued:
+        daemon_mod.ensure_daemon(store, ctx.obj["verbose"])
+        click.echo(f"🚀 daemon 已拉起，{len(queued)} 个任务待执行")
+    elif not n:
+        click.echo("✅ 无中断任务，队列为空")
+
+
+@cli.command()
 @click.option("--port", "-p", default=config.WEB_PORT, type=int)
 @click.option("--no-browser", is_flag=True, help="不自动打开浏览器")
 @click.pass_context
 def ui(ctx, port: int, no_browser: bool):
     """启动 Web 可视化界面（按需启动、用完即退，ctrl-c 退出；不影响后台分析）"""
+    # 打开 Web 时自动检查中断恢复（决策 D12：恢复由 CLI/Web 操作触发）
+    n = daemon_mod.recover_and_ensure(ctx.obj["store"], ctx.obj["verbose"])
+    if n:
+        click.echo(f"♻️ 已自动恢复 {n} 个中断任务")
     from analysis.web.app import run_web
     run_web(port=port, open_browser=not no_browser)
 

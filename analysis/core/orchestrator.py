@@ -184,15 +184,32 @@ class Orchestrator:
                 st.duration_seconds = round(time.monotonic() - t0, 2)
                 st.error = f"{type(e).__name__}: {e}"
                 if st.attempts < config.SUBTASK_MAX_ATTEMPTS:
+                    delay = (config.RETRY_DELAY_AI if spec.type == "ai"
+                             else config.RETRY_DELAY_DET)
                     self.store.save_task(task)
-                    self.store.append_event(task.task_id, "subtask_retry",
-                                            subtask=spec.name, message=st.error)
+                    self.store.append_event(
+                        task.task_id, "subtask_retry", subtask=spec.name,
+                        message=f"{st.error}；{delay}s 退避后重试（容忍网络瞬断）")
+                    if self._interruptible_sleep(task.task_id, delay):
+                        raise TaskCanceled()
                 else:
                     st.status = SubtaskStatus.FAILED
                     st.finished_at = now_iso()
                     self.store.save_task(task)
                     self.store.append_event(task.task_id, "subtask_failed",
                                             subtask=spec.name, message=st.error)
+
+    def _interruptible_sleep(self, task_id: str, seconds: float) -> bool:
+        """退避等待（每秒检查取消请求）；返回 True 表示收到取消"""
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            time.sleep(min(1.0, max(0.0, deadline - time.monotonic())))
+            try:
+                if self.store.load_task(task_id).cancel_requested:
+                    return True
+            except Exception:
+                pass
+        return False
 
     @staticmethod
     def _execute_with_timeout(handler: Callable, ctx: AnalysisContext, timeout: int) -> Any:

@@ -27,6 +27,11 @@ DET_SUBTASK_TIMEOUT = 300       # 确定性采集子任务：5 分钟
 AI_SUBTASK_TIMEOUT = 1800       # AI 子任务：30 分钟
 SUBTASK_MAX_ATTEMPTS = 2        # 首次执行 + 自动重试一次
 
+# ---------- 中断恢复与重试退避（REQ v6 第 7 章） ----------
+HEARTBEAT_INTERVAL = 10         # daemon 心跳写入间隔（秒）
+RETRY_DELAY_DET = 5             # 确定性子任务重试前退避（秒，容忍网络瞬断）
+RETRY_DELAY_AI = 30             # AI 子任务重试前退避（秒）
+
 # ---------- Web ----------
 WEB_HOST = "127.0.0.1"          # 仅本机（REQ §4.3）
 WEB_PORT = 8765

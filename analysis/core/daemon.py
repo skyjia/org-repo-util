@@ -61,37 +61,70 @@ def ensure_daemon(store: TaskStore, verbose: bool = False) -> tuple[bool, int | 
     raise RuntimeError(f"daemon 启动超时，查看日志: {config.DAEMON_LOG_FILE}")
 
 
-def recover_orphan_tasks(store: TaskStore) -> None:
-    """daemon 启动时：running 状态的任务必为孤儿（旧 daemon 已死）"""
+def recover_interrupted_tasks(store: TaskStore) -> int:
+    """中断恢复（REQ v6 / 决策 D11）：running 孤儿任务自动重新入队续跑。
+
+    调用时机安全性：仅在确认 daemon 不存活时调用（daemon 启动时旧 daemon 必已死，
+    由 pid 检测 + flock 保证），因此 running 状态必为中断残留。
+    被中断的子任务重置为 queued（attempts 归零——中断非业务失败）；
+    已完成子任务保留（幂等重入跳过）；cancel_requested 意图保留。
+    """
+    recovered = 0
     for task in store.list_tasks():
         if task.status == TaskStatus.RUNNING:
-            task.status = TaskStatus.FAILED
-            task.finished_at = now_iso()
-            task.error = "daemon 中断（进程异常退出），可执行 retry 恢复"
             for st in task.subtasks.values():
                 if st.status == SubtaskStatus.RUNNING:
-                    st.status = SubtaskStatus.FAILED
-                    st.error = "daemon 中断"
+                    st.status = SubtaskStatus.QUEUED
+                    st.attempts = 0
+                    st.error = None
+                    st.started_at = None
+            task.status = TaskStatus.QUEUED
             store.save_task(task)
-            store.append_event(task.task_id, "task_failed",
-                               message="daemon 中断，任务标记为失败（可 retry）")
+            store.append_event(task.task_id, "task_queued",
+                               message="中断恢复：检测到执行器中断（休眠/重启/进程终止），"
+                                       "自动重新入队续跑（已完成子任务不重复执行）")
+            recovered += 1
+    return recovered
+
+
+def recover_and_ensure(store: TaskStore, verbose: bool = False) -> int:
+    """恢复入口（resume/ui 命令用）：daemon 未运行时恢复孤儿任务并按需拉起"""
+    if store.is_daemon_alive():
+        return 0
+    n = recover_interrupted_tasks(store)
+    if n or store.queued_tasks():
+        ensure_daemon(store, verbose)
+    return n
 
 
 def daemon_loop(store: TaskStore) -> None:
     """daemon 主循环（在 _daemon 子命令中调用）"""
+    if not store.acquire_daemon_lock():
+        print(f"[{now_iso()}] 另一 daemon 已在运行（flock），本进程退出", flush=True)
+        return
     store.write_pid(os.getpid())
     print(f"[{now_iso()}] daemon 启动 pid={os.getpid()}", flush=True)
-    recover_orphan_tasks(store)
+    n = recover_interrupted_tasks(store)
+    if n:
+        print(f"[{now_iso()}] 中断恢复：{n} 个任务自动重新入队", flush=True)
 
     orchestrator = Orchestrator(store)
     idle_since: float | None = None
+    last_heartbeat = 0.0
+    current_task_id: str | None = None
 
     try:
         while True:
+            now = time.monotonic()
+            if now - last_heartbeat >= config.HEARTBEAT_INTERVAL:
+                store.write_heartbeat(current_task_id)
+                last_heartbeat = now
             queued = store.queued_tasks()
             if queued:
                 idle_since = None
                 task = queued[0]                      # FIFO（created_at 升序）
+                current_task_id = task.task_id
+                store.write_heartbeat(current_task_id)
                 print(f"[{now_iso()}] 执行任务 {task.task_id}", flush=True)
                 try:
                     orchestrator.run_task(task)
@@ -109,6 +142,8 @@ def daemon_loop(store: TaskStore) -> None:
                             store.append_event(task.task_id, "task_failed", message=t.error)
                     except Exception:
                         pass
+                finally:
+                    current_task_id = None
             else:
                 if idle_since is None:
                     idle_since = time.monotonic()

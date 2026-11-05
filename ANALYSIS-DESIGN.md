@@ -168,10 +168,13 @@ analysis/                          # 与 audit/ 并列；顶层目录即 Python 
 
 ## 4. 执行器 Daemon
 
-- **进程模型**：`analyze start` 创建任务后调用 `ensure_daemon()`——检查 `state/daemon.pid`（存在且进程存活则复用），否则 `subprocess.Popen([sys.executable, analyze, "_daemon"], start_new_session=True)` 拉起 detached 后台进程，stdout/stderr 重定向到 `state/daemon.log`；
-- **daemon 主循环**：每 1s 轮询 `state/tasks/*/task.json` 中 `status=queued` 的任务，按 `created_at` FIFO 取一个执行（全局串行）；空闲超过 `daemon_idle_ttl`（默认 30min）自动退出（下次 start 重新拉起）；
+- **进程模型**：`analyze start` 创建任务后调用 `ensure_daemon()`——检查 `state/daemon.pid`（存在且进程存活则复用），否则 `subprocess.Popen([sys.executable, analyze, "_daemon"], start_new_session=True)` 拉起 detached 后台进程，stdout/stderr 重定向到 `state/daemon.log`；启动时以 **flock 独占锁**（`state/daemon.lock`）防双 daemon 竞态；
+- **daemon 主循环**：每 1s 轮询 `state/tasks/*/task.json` 中 `status=queued` 的任务，按 `created_at` FIFO 取一个执行（全局串行）；**每 10s 写心跳** `state/daemon.heartbeat`（pid/时间戳/当前任务）；空闲超过 `daemon_idle_ttl`（默认 30min）自动退出（下次 start 重新拉起）；
 - **Web 解耦**（REQ §4.3/第 7 章）：daemon 不依赖 Web 进程；Web 退出/未启动不影响执行；
-- **崩溃恢复**：daemon 启动时扫描 `status=running` 但 pid 不属于自己的任务 → 标记为 `failed(interrupted)` 并写事件，用户可 retry。
+- **中断恢复（自动续跑）**：daemon 启动时扫描 `status=running` 的孤儿任务（旧 daemon 已死，由 pid/flock 保证判定安全）→ 被中断的子任务重置为 `queued`（attempts 归零——中断非业务失败）→ **任务自动重新入队续跑**，无需人工 retry；已完成子任务靠幂等重入跳过；`cancel_requested` 意图保留；写「中断恢复」事件；
+- **恢复触发点**：`start` / `retry` / `resume`（显式命令）/ `ui`（启动 Web 时）均执行 `ensure_daemon` → daemon 启动即恢复扫描；覆盖休眠唤醒（进程未被杀则冻结后继续执行，网络类子任务失败由退避重试兜底）与系统重启（下次任意命令触发恢复）两类场景；
+- **重试退避**：子任务失败重试前等待（det 5s / AI 30s，`config.py` 可配），退避期间每秒检查取消请求；
+- **已知局限**：宿主机休眠期间 SIGALRM 时钟语义不可靠，唤醒后子任务可能被立即判超时——由「自动重试 + 孤儿续跑」双层兜底，最坏情况该子任务多执行一次（幂等产物覆盖写，无副作用）。
 
 ## 5. 采集器设计（确定性）
 
@@ -313,6 +316,8 @@ vendor 资源（一次性下载入库）：`echarts.min.js`（~1MB）、`mermaid
 | D8 | Web 也可发起任务（POST /api/tasks），与 CLI 同一入口逻辑 | 便利性；写操作仍走同一 task 队列，无并发风险（daemon 串行） |
 | D9 | 规则评分函数输出 factors[] 因子明细 | 分数可解释，报告展示扣分原因，避免黑盒评分 |
 | D10 | 子任务产物先落 state/，归档时组装 | 增量落盘（REQ §4.1）与归档解耦；retry 不重复已完成工作 |
+| D11 | 孤儿任务自动重新入队续跑，而非标记 failed 等人工 retry | REQ v6 中断恢复要求：休眠/重启后无需人工干预；幂等重入保证不重复工作 |
+| D12 | 不安装 launchd 常驻服务，恢复由 CLI/Web 操作触发 | 保持「按需启动」轻量形态；重启后首次任意命令即恢复。若需全自动可后续补 launchd plist（可选项） |
 
 ## 13. 里程碑规划（详见 ANALYSIS-DEV-PLAN.md）
 

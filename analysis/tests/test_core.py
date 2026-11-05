@@ -22,6 +22,13 @@ def clean_handlers():
     HANDLERS.clear()
 
 
+@pytest.fixture(autouse=True)
+def fast_retry(monkeypatch):
+    """测试中将重试退避置零（生产默认 det 5s / AI 30s）"""
+    monkeypatch.setattr(config, "RETRY_DELAY_DET", 0)
+    monkeypatch.setattr(config, "RETRY_DELAY_AI", 0)
+
+
 @pytest.fixture
 def store(tmp_path):
     return TaskStore(tasks_dir=tmp_path / "tasks", state_dir=tmp_path)
@@ -241,3 +248,76 @@ def test_execute_no_timeout_needed():
         return {"ok": True}
 
     assert Orchestrator._execute_with_timeout(fast, None, timeout=5) == {"ok": True}
+
+
+# ---------- 中断恢复（REQ v6 / T551-T553） ----------
+
+def test_recover_interrupted_tasks(store, repo):
+    from analysis.core.daemon import recover_interrupted_tasks
+
+    make_task(store, repo, mock=True)
+    task = store.load_task("t1")
+    # 模拟中断现场：任务 running，一个子任务已完成、一个卡在 running
+    task.status = TaskStatus.RUNNING
+    task.subtasks["collect.overview"].status = SubtaskStatus.COMPLETED
+    st = task.subtasks["collect.structure"]
+    st.status = SubtaskStatus.RUNNING
+    st.attempts = 1
+    st.started_at = "2026-11-05T00:00:00"
+    store.save_task(task)
+
+    n = recover_interrupted_tasks(store)
+    assert n == 1
+    t = store.load_task("t1")
+    assert t.status == TaskStatus.QUEUED                    # 自动重新入队（决策 D11）
+    assert t.subtasks["collect.structure"].status == SubtaskStatus.QUEUED
+    assert t.subtasks["collect.structure"].attempts == 0    # 中断非业务失败，计数归零
+    assert t.subtasks["collect.overview"].status == SubtaskStatus.COMPLETED
+    # 事件流记录恢复
+    assert any(e["type"] == "task_queued" and "中断恢复" in e.get("message", "")
+               for e in store.read_events("t1"))
+
+    # 续跑：幂等重入，最终完成
+    t2 = Orchestrator(store).run_task(t)
+    assert t2.status == TaskStatus.COMPLETED
+    assert t2.progress["completed"] == 15
+
+
+def test_recover_preserves_cancel_intent(store, repo):
+    from analysis.core.daemon import recover_interrupted_tasks
+
+    make_task(store, repo, mock=True)
+    task = store.load_task("t1")
+    task.status = TaskStatus.RUNNING
+    task.cancel_requested = True    # 中断前用户已请求取消
+    task.subtasks["collect.overview"].status = SubtaskStatus.RUNNING
+    store.save_task(task)
+
+    recover_interrupted_tasks(store)
+    t = store.load_task("t1")
+    assert t.status == TaskStatus.QUEUED
+    assert t.cancel_requested is True   # 取消意图保留 → 续跑时立即生效
+
+    t2 = Orchestrator(store).run_task(t)
+    assert t2.status == TaskStatus.CANCELED
+
+
+def test_no_orphan_no_recovery(store, repo):
+    from analysis.core.daemon import recover_interrupted_tasks
+
+    make_task(store, repo, mock=True)
+    assert recover_interrupted_tasks(store) == 0    # queued 任务不受影响
+    assert store.load_task("t1").status == TaskStatus.QUEUED
+
+
+def test_daemon_lock_exclusive(store):
+    assert store.acquire_daemon_lock() is True
+    store2 = TaskStore(tasks_dir=store.tasks_dir, state_dir=store.state_dir)
+    assert store2.acquire_daemon_lock() is False    # flock 独占：第二个 daemon 拒绝启动
+
+
+def test_heartbeat_roundtrip(store):
+    store.write_heartbeat("task-x")
+    hb = store.read_heartbeat()
+    assert hb and hb["current_task"] == "task-x"
+    assert hb["ts"] > 0
