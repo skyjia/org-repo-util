@@ -32,10 +32,14 @@ analysis/bin/analyze ui                     # http://127.0.0.1:8765
 # 任务管理
 analysis/bin/analyze status [task_id]       # 进度与子任务状态
 analysis/bin/analyze history
-analysis/bin/analyze cancel <task_id>
-analysis/bin/analyze retry <task_id> [--subtask ai.summary]
+analysis/bin/analyze cancel <task_id>       # 取消（flag 机制，子任务边界生效）
+analysis/bin/analyze retry <task_id> [--subtask NAME]   # --subtask 默认级联重置下游
+analysis/bin/analyze resume                 # 中断恢复（休眠/重启后自动续跑孤儿任务）
 analysis/bin/analyze report <task_id> --open
 ```
+
+> 注意：更新 analysis 代码后需重启 Web 进程（`pkill -f 'analyze ui'` 后重新 `analyze ui`）——
+> 后端代码不热更新；页头显示版本号（v0.2.0+）可用于识别旧进程。
 
 归档产物：`reports/<org>/<repo>/analysis/<timestamp>.{html,json}`（`latest.html` / `latest.json` 指向最近一次）。
 

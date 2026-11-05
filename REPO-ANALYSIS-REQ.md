@@ -326,12 +326,12 @@ reports/<org>/<repo>/
 
 ## 8. 待决策项
 
-剩余决策项均属实现设计阶段产物，不阻塞需求评审：
+全部决策项已落定（原剩余 2 项在实现阶段完成）：
 
-| # | 决策项 | 说明 | 确定时机 |
-|---|--------|------|----------|
-| 1 | JSON schema 字段级定义 | 含子任务状态、知识清单、问题清单的完整字段 | 实现设计阶段 |
-| 2 | AI 提示词模板体系 | 各 AI 维度（架构 / 业务还原 / 结论撰写）的提示词与输出 schema | 实现设计阶段 |
+| # | 决策项 | 结论 |
+|---|--------|------|
+| 1 | JSON schema 字段级定义 | ✅ schema v1 已实现：`analysis/reporters/json_report.py`（metadata/scores/chapters/issues/knowledge/subtasks_status，含 schema_version） |
+| 2 | AI 提示词模板体系 | ✅ 已实现：`analysis/ai/prompts/`（4 套模板，prompt_version 哈希追溯）+ `analysis/ai/schemas/`（jsonschema 校验） |
 
 **已决策项**（决策内容已写入正文对应章节）：
 

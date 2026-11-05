@@ -26,6 +26,14 @@ fish src/main.fish scan
 
 # Help
 fish src/main.fish --help
+
+# 代码审计（Python 工具，见 audit/ 与 AUDIT-DESIGN.md）
+audit/bin/audit repo <path> [--save]
+
+# 仓库全面分析（Python 工具，见 analysis/ 与 ANALYSIS-DESIGN.md；需求 REPO-ANALYSIS-REQ.md）
+analysis/bin/analyze start <org>/<repo> [--ref <branch|tag|commit>]
+analysis/bin/analyze ui                # Web 可视化：工作流/执行节奏/增量报告（按需启动）
+analysis/bin/analyze status | history | cancel | retry | resume | report | doctor
 ```
 
 ## Project Structure
@@ -38,6 +46,9 @@ fish src/main.fish --help
 - `src/commands/scan.fish` — Scan for deleted, renamed, or corrupted repos
 - `repos/<org>/<repo>/` — Cloned repositories organized by organization
 - `logs/errors.log` — Append-only error log (session headers + error details with raw stderr)
+- `audit/` — 代码审计工具（Python：ESLint/golangci-lint/dotnet-format 静态扫描 + AI 辅助，见 AUDIT-DESIGN.md）
+- `analysis/` — 仓库全面分析工具（Python：异步子任务流水线 + claude headless AI 解读 + FastAPI Web 控制台，见 ANALYSIS-DESIGN.md）
+- `reports/<org>/<repo>/` — audit 报告归档（`<timestamp>/` + latest）；分析报告归档于 `analysis/` 子目录（与 audit 隔离）
 
 ## Requirements
 
@@ -70,3 +81,6 @@ fish src/main.fish --help
 - Scan uses secondary verification with `git ls-remote` when `gh api` fails to avoid false positives
 - Error details are written to `logs/errors.log` (append-only), terminal shows summary only
 - Batch operations continue on failure; failed clones captured via per-repo temp stderr files
+- analysis 混合执行：9 个确定性采集器（复用 audit 产物/lizard/OSV）+ 4 个 AI 子任务（`claude -p` 只读白名单 Read/Grep/Glob，解读型任务空白名单）+ 规则/AI 混合评分（9 维加权 → A–F）
+- analysis 全局串行流水线：子任务状态机 + 增量落盘（JSON/JSONL 文件存储）；中断自动恢复（daemon 心跳 + 孤儿任务自动重新入队 + `analyze resume`）；AI 产物标注 `_ai_meta` 非确定性
+- analysis 归档 HTML 为自包含单文件（内联 ECharts/mermaid，离线可分享）；Web 控制台按需启动（localhost，用完即退，与执行器解耦）

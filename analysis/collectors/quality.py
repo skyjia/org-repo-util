@@ -35,6 +35,9 @@ class QualityCollector(Collector):
                 "source": "audit",
                 "audit_generated_at": audit.get("audit_generated_at"),
                 "staleness_note": audit.get("staleness_note"),
+                # 评分密度计算必需（scoring 按 issues/KLOC 归一）
+                "lines_scanned": audit.get("lines_scanned"),
+                "files_scanned": audit.get("files_scanned"),
                 **summarize_issues(lint_issues, rel_root=None),
             }
         else:
