@@ -474,6 +474,78 @@ def docs_rules():
         click.echo("  ⚠️  生成失败")
 
 
+@cli.group()
+def ai():
+    """AI 辅助功能"""
+    pass
+
+
+@ai.command("suggest-config")
+@click.argument("repo_path", type=click.Path(exists=True))
+@click.option("--output", "-o", type=click.Path(), help="输出文件路径，默认保存在仓库根目录")
+def ai_suggest_config(repo_path: str, output: Optional[str]):
+    """AI 辅助配置生成"""
+    from audit.ai.config_generator import ConfigGenerator
+
+    click.echo(f"🤖 分析仓库并生成配置建议: {repo_path}")
+
+    try:
+        generator = ConfigGenerator()
+        output_path = generator.save_config_suggestion(repo_path, output)
+        click.echo(f"  ✅ 配置建议已保存: {output_path}")
+    except Exception as e:
+        click.echo(f"  ❌ 生成失败: {e}", err=True)
+        sys.exit(1)
+
+
+@ai.command("interpret")
+@click.argument("report_path", type=click.Path(exists=True))
+@click.option("--output", "-o", type=click.Path(), help="输出文件路径")
+def ai_interpret(report_path: str, output: Optional[str]):
+    """AI 辅助结果解读"""
+    from audit.ai.result_interpreter import ResultInterpreter
+
+    click.echo(f"🤖 解读审计报告: {report_path}")
+
+    try:
+        interpreter = ResultInterpreter()
+        output_path = interpreter.save_interpretation(report_path, output)
+        click.echo(f"  ✅ 解读报告已保存: {output_path}")
+    except Exception as e:
+        click.echo(f"  ❌ 解读失败: {e}", err=True)
+        sys.exit(1)
+
+
+@ai.command("suggest-fixes")
+@click.argument("report_path", type=click.Path(exists=True))
+@click.option("--output", "-o", type=click.Path(), help="输出文件路径，默认保存在报告同目录下")
+@click.option("--top", "-n", type=int, default=10, help="生成修复建议的问题数量")
+def ai_suggest_fixes(report_path: str, output: Optional[str], top: int):
+    """AI 辅助修复建议"""
+    from audit.ai.result_interpreter import ResultInterpreter
+    from pathlib import Path
+
+    click.echo(f"🤖 生成修复建议: {report_path}")
+
+    try:
+        interpreter = ResultInterpreter()
+        fixes = interpreter.suggest_fixes(report_path, top_n=top)
+
+        if output:
+            output_path = output
+        else:
+            # 默认保存在报告同目录下
+            report_dir = Path(report_path).parent
+            output_path = str(report_dir / "ai-fix-suggestions.md")
+
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write(fixes)
+        click.echo(f"  ✅ 修复建议已保存: {output_path}")
+    except Exception as e:
+        click.echo(f"  ❌ 生成失败: {e}", err=True)
+        sys.exit(1)
+
+
 def main():
     """主入口"""
     cli()
