@@ -151,6 +151,124 @@ def _prune_generic(d, limit=3500):
     return _trim(d, limit)
 
 
+# ---------- 解读型任务的深度裁剪（L3：只留统计值与 TOP 少数，砍明细样例） ----------
+
+def _prune_structure_lite(d):
+    if not d:
+        return None
+    return {
+        "total_files": d.get("total_files"),
+        "primary_language": d.get("primary_language"),
+        "languages": {k: v.get("lines") for k, v in list((d.get("languages") or {}).items())[:6]},
+        "categories": d.get("categories"),
+        "test_to_production_ratio": d.get("test_to_production_ratio"),
+        "top_dirs": list((d.get("top_level_dirs") or {}).keys())[:10],
+        "longest_files": (d.get("longest_files") or [])[:5],
+    }
+
+
+def _prune_deps_lite(d):
+    if not d:
+        return None
+    g = d.get("dependency_graph") or {}
+    return {
+        "manifests_detected": d.get("manifests_detected"),
+        "dependency_count": d.get("dependency_count"),
+        "pinned_ratio": d.get("pinned_ratio"),
+        "unpinned_count": (d.get("unpinned_versions") or {}).get("count"),
+        "graph": {"tool": g.get("tool"), "nodes": len(g.get("nodes") or []),
+                  "edges": len(g.get("edges") or []), "reason": g.get("reason")} if g else None,
+    }
+
+
+def _prune_quality_lite(d):
+    if not d:
+        return None
+    lint = d.get("style_lint") or {}
+    cx = d.get("complexity") or {}
+    return {
+        "style_lint": {k: lint.get(k) for k in ("source", "audit_generated_at", "staleness_note",
+                                                "total", "by_severity", "suggestion")},
+        "top_rules": (lint.get("top_rules") or [])[:5],
+        "complexity": {k: cx.get(k) for k in ("functions_analyzed", "average_ccn",
+                                              "high_ccn_count", "medium_ccn_count",
+                                              "high_ccn_ratio", "suggestion")},
+        "top_complex_functions": (cx.get("top_complex_functions") or [])[:3],
+        "long_file_count": len(cx.get("long_files") or []),
+        "code_smells": d.get("code_smells"),
+    }
+
+
+def _prune_security_lite(d):
+    if not d:
+        return None
+    osv = d.get("dependency_vulnerabilities") or {}
+    asec = d.get("audit_security") or {}
+    sh = d.get("static_heuristics") or {}
+    return {
+        "osv": {"found": osv.get("found"), "queried": osv.get("queried"),
+                "affected_package_count": osv.get("affected_package_count"),
+                "vulnerability_entries": osv.get("vulnerability_entries"),
+                "top_affected": [{k: p.get(k) for k in ("package", "version")}
+                                 | {"vuln_count": len(p.get("vuln_ids") or [])}
+                                 for p in (osv.get("affected_packages") or [])[:5]],
+                "note": osv.get("reason") or osv.get("suggestion")},
+        "audit_security": {k: asec.get(k) for k in ("source", "total", "by_severity",
+                                                    "audit_generated_at", "suggestion")},
+        "static_patterns_matched": sh.get("patterns_matched"),
+        "best_practices": d.get("best_practices"),
+    }
+
+
+def _prune_scoring_lite(d):
+    if not d:
+        return None
+    dims = {}
+    for dim, v in (d.get("dimensions") or {}).items():
+        factors = sorted((f for f in (v.get("factors") or [])
+                          if isinstance(f.get("impact"), (int, float)) and f["impact"] < 0),
+                         key=lambda f: f["impact"])[:2]
+        dims[dim] = {"score": v.get("score"), "weight": v.get("weight"),
+                     "source": v.get("source"),
+                     "top_deductions": [f["factor"] for f in factors],
+                     "missing_reason": v.get("missing_reason")}
+    return {"total": d.get("total"), "grade": d.get("grade"),
+            "missing_dimensions": d.get("missing_dimensions"), "dimensions": dims}
+
+
+def _prune_conclusions_lite(d):
+    if not d:
+        return None
+    dims = {}
+    for dim, c in (d.get("dimensions") or {}).items():
+        dims[dim] = {"summary": c.get("summary"),
+                     "top_findings": [{k: f.get(k) for k in ("severity", "title")}
+                                      for f in (c.get("findings") or [])[:2]]}
+    return {"dimensions": dims}
+
+
+def _prune_arch_lite(d):
+    if not d:
+        return None
+    return {"overview": d.get("overview"), "score": d.get("score"),
+            "top_issues": [{k: i.get(k) for k in ("severity", "title")}
+                           for i in (d.get("issues") or [])[:5]],
+            "doc_completeness": (d.get("doc_assessment") or {}).get("completeness")}
+
+
+def _prune_bk_lite(d):
+    if not d:
+        return None
+    confs = sorted(k.get("confidence") or 0 for k in (d.get("knowledge") or []))
+    return {"readiness": d.get("readiness"), "score": d.get("score"),
+            "knowledge_count": len(d.get("knowledge") or []),
+            "confidence_min_median_max": [confs[0], confs[len(confs) // 2], confs[-1]] if confs else None,
+            "gap_count": len(d.get("gaps") or []),
+            "top_gaps": [{k: g.get(k) for k in ("topic", "impact")}
+                         for g in (d.get("gaps") or [])[:4]],
+            "contradiction_count": len(d.get("contradictions") or [])}
+
+
 def _validate(name: str, data: dict) -> None:
     schema = json.loads((AI_DIR / "schemas" / f"{name}.json").read_text(encoding="utf-8"))
     jsonschema.validate(data, schema)
@@ -187,8 +305,10 @@ def ai_architecture(ctx) -> dict:
     return _run_ai(
         ctx, "architecture",
         structure_summary=_dumps(_prune_structure(ctx.read_dependency_output("collect.structure"))),
-        deps_summary=_trim(_prune_deps(ctx.read_dependency_output("collect.dependencies")), 7000),
-        git_summary=_trim(_prune_git(ctx.read_dependency_output("collect.git_context")), 4000))
+        deps_summary=_trim(_prune_deps(ctx.read_dependency_output("collect.dependencies"),
+                                       max_deps=40, max_nodes=60, max_edges=80), 5000),
+        git_summary=_trim(_prune_git(ctx.read_dependency_output("collect.git_context"),
+                                     recent=20, older=40, words=20), 3000))
 
 
 @register("ai.business_knowledge")
@@ -196,39 +316,32 @@ def ai_business_knowledge(ctx) -> dict:
     return _run_ai(
         ctx, "business_knowledge",
         structure_summary=_trim(_prune_structure(ctx.read_dependency_output("collect.structure")), 3000),
-        docs_summary=_prune_generic(ctx.read_dependency_output("collect.docs"), 3000),
-        git_summary=_trim(_prune_git(ctx.read_dependency_output("collect.git_context")), 6000))
+        docs_summary=_prune_generic(ctx.read_dependency_output("collect.docs"), 2500),
+        git_summary=_trim(_prune_git(ctx.read_dependency_output("collect.git_context"),
+                                     recent=25, older=40, words=25), 4500))
 
 
-# ---------- 解读型子任务（空白名单：只解读注入数据，不探索代码） ----------
+# ---------- 解读型子任务（空白名单 + 深度裁剪注入：只留统计值与 TOP 少数） ----------
 
 @register("ai.conclusions")
 def ai_conclusions(ctx) -> dict:
     return _run_ai(
         ctx, "conclusions", allowed_tools="",
-        structure_summary=_prune_generic(ctx.read_dependency_output("collect.structure"), 2500),
-        deps_summary=_prune_generic(_prune_deps(ctx.read_dependency_output("collect.dependencies")), 3000),
-        quality_summary=_prune_generic(_prune_quality(ctx.read_dependency_output("collect.quality")), 4000),
-        security_summary=_prune_generic(_prune_security(ctx.read_dependency_output("collect.security")), 4000),
-        performance_summary=_prune_generic(ctx.read_dependency_output("collect.performance"), 3000),
-        docs_summary=_prune_generic(ctx.read_dependency_output("collect.docs"), 2500),
-        tests_summary=_prune_generic(ctx.read_dependency_output("collect.tests"), 2500))
+        structure_summary=_dumps(_prune_structure_lite(ctx.read_dependency_output("collect.structure"))),
+        deps_summary=_dumps(_prune_deps_lite(ctx.read_dependency_output("collect.dependencies"))),
+        quality_summary=_dumps(_prune_quality_lite(ctx.read_dependency_output("collect.quality"))),
+        security_summary=_dumps(_prune_security_lite(ctx.read_dependency_output("collect.security"))),
+        performance_summary=_prune_generic(ctx.read_dependency_output("collect.performance"), 1800),
+        docs_summary=_prune_generic(ctx.read_dependency_output("collect.docs"), 1800),
+        tests_summary=_prune_generic(ctx.read_dependency_output("collect.tests"), 1800))
 
 
 @register("ai.summary")
 def ai_summary(ctx) -> dict:
-    arch = ctx.read_dependency_output("ai.architecture") or {}
-    bk = ctx.read_dependency_output("ai.business_knowledge") or {}
     return _run_ai(
         ctx, "summary", allowed_tools="",
-        scoring_summary=_prune_generic(ctx.read_dependency_output("scoring"), 4000),
-        conclusions_summary=_prune_generic(ctx.read_dependency_output("ai.conclusions"), 7000),
-        architecture_summary=_prune_generic({
-            "overview": arch.get("overview"), "score": arch.get("score"),
-            "issues": (arch.get("issues") or [])[:8]}, 3000),
-        business_summary=_prune_generic({
-            "readiness": bk.get("readiness"), "score": bk.get("score"),
-            "gap_count": len(bk.get("gaps") or []),
-            "gaps": (bk.get("gaps") or [])[:6],
-            "contradiction_count": len(bk.get("contradictions") or [])}, 3000),
-        overview_summary=_prune_generic(ctx.read_dependency_output("collect.overview"), 2500))
+        scoring_summary=_dumps(_prune_scoring_lite(ctx.read_dependency_output("scoring"))),
+        conclusions_summary=_dumps(_prune_conclusions_lite(ctx.read_dependency_output("ai.conclusions"))),
+        architecture_summary=_dumps(_prune_arch_lite(ctx.read_dependency_output("ai.architecture"))),
+        business_summary=_dumps(_prune_bk_lite(ctx.read_dependency_output("ai.business_knowledge"))),
+        overview_summary=_prune_generic(ctx.read_dependency_output("collect.overview"), 1500))

@@ -419,6 +419,14 @@ ul.tight{margin:6px 0;padding-left:22px}ul.tight li{margin:3px 0}
 <h2>附录：子任务执行状态</h2>
 <table><tr><th>子任务</th><th>类型</th><th>状态</th><th>尝试</th><th>耗时</th><th>备注</th></tr>
 {% for name, s in (report.subtasks_status or {}).items() %}<tr><td><code>{{ name }}</code></td><td>{{ s.type }}</td><td>{{ s.status }}</td><td class="num">{{ s.attempts }}</td><td class="num">{{ s.duration_seconds or '-' }}{% if s.duration_seconds %}s{% endif %}</td><td class="evidence">{{ s.error or s.skip_reason or '' }}</td></tr>{% endfor %}</table>
+{% set aiu = meta.ai_usage or {} %}
+{% if aiu.per_subtask %}
+<h3>AI 用量观测（token / 成本）</h3>
+<table><tr><th>子任务</th><th>turns</th><th>成本</th><th>cache 创建</th><th>cache 读取</th><th>输出</th><th>API 耗时</th></tr>
+{% for name, m in aiu.per_subtask.items() %}<tr><td><code>{{ name }}</code></td><td class="num">{{ m.num_turns or '-' }}</td><td class="num">${{ '%.2f'|format(m.total_cost_usd or 0) }}</td><td class="num">{{ m.cache_creation_input_tokens or '-' }}</td><td class="num">{{ m.cache_read_input_tokens or 0 }}</td><td class="num">{{ m.output_tokens or '-' }}</td><td class="num">{{ '%.0f'|format((m.duration_api_ms or 0)/1000) }}s</td></tr>{% endfor %}
+<tr><th>合计</th><th></th><th class="num">${{ '%.2f'|format(aiu.total_cost_usd or 0) }}</th><th></th><th class="num">{{ aiu.total_cache_read_tokens or 0 }}</th><th class="num">{{ aiu.total_output_tokens or 0 }}</th><th></th></tr></table>
+<div class="notice">{{ aiu.note }}</div>
+{% endif %}
 <div class="footer">本报告由 org-repo-util/analysis 生成 · 纯静态分析 · 数据内嵌于本文件（#report-data）可机器解析</div>
 </section>
 

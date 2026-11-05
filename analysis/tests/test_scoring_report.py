@@ -128,6 +128,21 @@ def _make_task():
     return task
 
 
+def test_build_ai_usage():
+    from analysis.reporters.json_report import build_ai_usage
+    outputs = {
+        "ai.summary": {"_ai_meta": {"num_turns": 1, "total_cost_usd": 0.3,
+                                    "output_tokens": 5000, "cache_read_input_tokens": 0}},
+        "ai.conclusions": {"_ai_meta": {"num_turns": 1, "total_cost_usd": 0.45,
+                                        "output_tokens": 9000, "cache_read_input_tokens": 0}},
+        "collect.overview": {"x": 1},   # 非 AI 产物不计入
+    }
+    u = build_ai_usage(outputs)
+    assert u["total_cost_usd"] == 0.75
+    assert u["total_output_tokens"] == 14000
+    assert set(u["per_subtask"]) == {"ai.summary", "ai.conclusions"}
+
+
 def test_build_report_structure():
     task = _make_task()
     outputs = {"collect.overview": {"name": "demo", "git": {"total_commits": 5}}}

@@ -138,6 +138,32 @@ def aggregate_issues(outputs: dict[str, Optional[dict]]) -> list[dict]:
     return unique
 
 
+def build_ai_usage(outputs: dict[str, Optional[dict]]) -> dict:
+    """聚合各 AI 子任务的 token/成本观测（L6 成本可见化）"""
+    per_subtask = {}
+    total_cost = 0.0
+    total_output = 0
+    total_cache_read = 0
+    for name, data in outputs.items():
+        if isinstance(data, dict) and "_ai_meta" in data:
+            m = data["_ai_meta"]
+            per_subtask[name] = {k: m.get(k) for k in
+                                 ("num_turns", "total_cost_usd", "input_tokens",
+                                  "cache_creation_input_tokens", "cache_read_input_tokens",
+                                  "output_tokens", "duration_api_ms", "prompt_version")}
+            total_cost += m.get("total_cost_usd") or 0
+            total_output += m.get("output_tokens") or 0
+            total_cache_read += m.get("cache_read_input_tokens") or 0
+    return {
+        "per_subtask": per_subtask,
+        "total_cost_usd": round(total_cost, 4),
+        "total_output_tokens": total_output,
+        "total_cache_read_tokens": total_cache_read,
+        "note": "计量来自 claude headless envelope（第三方 provider 换算）；"
+                "确定性采集子任务不消耗 AI token",
+    }
+
+
 def build_metadata(task: Task, outputs: dict[str, Optional[dict]]) -> dict:
     prompt_versions = {}
     for name, data in outputs.items():
@@ -174,6 +200,7 @@ def build_metadata(task: Task, outputs: dict[str, Optional[dict]]) -> dict:
             "静态代码分析", "本地 git 历史（不含人员信息）", "GitHub API",
             "仓库内已有产物文件", "现有 audit 扫描产物",
         ],
+        "ai_usage": build_ai_usage(outputs),
         "audit_refs": audit_refs,
         "limitations": [
             "纯静态分析：未运行目标仓库任何代码（构建/测试/benchmark 均未执行）",
